@@ -1,0 +1,1381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>足球自动转播导播台原型</title>
+  <style>
+    :root {
+      --ink: #eef7ef;
+      --muted: #8fa598;
+      --subtle: rgba(238, 247, 239, 0.13);
+      --panel: rgba(8, 17, 14, 0.76);
+      --panel-strong: rgba(5, 12, 10, 0.92);
+      --pitch: #123f2b;
+      --pitch-deep: #09261c;
+      --lime: #d6f25f;
+      --cyan: #45d9ff;
+      --amber: #ffbd4a;
+      --red: #ff4c4c;
+      --blue: #5d91ff;
+      --line: rgba(237, 255, 239, 0.7);
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
+      font-family: "Bahnschrift", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 56px 56px,
+        linear-gradient(0deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 56px 56px,
+        radial-gradient(circle at 24% 18%, rgba(69,217,255,0.20), transparent 30%),
+        radial-gradient(circle at 82% 82%, rgba(214,242,95,0.16), transparent 28%),
+        linear-gradient(135deg, #07100d 0%, #0e2219 47%, #071310 100%);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .stage {
+      width: min(calc(100vw - 24px), calc((100vh - 24px) * 16 / 9));
+      height: min(calc(100vh - 24px), calc((100vw - 24px) * 9 / 16));
+      margin: 12px auto;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(238, 247, 239, 0.18);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.05), transparent 28%),
+        linear-gradient(0deg, rgba(0,0,0,0.18), rgba(0,0,0,0.18)),
+        var(--panel-strong);
+      box-shadow: var(--shadow);
+      isolation: isolate;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: -18%;
+      background:
+        repeating-linear-gradient(112deg, rgba(214,242,95,0.07) 0 2px, transparent 2px 18px),
+        radial-gradient(circle at center, transparent 0 18%, rgba(255,255,255,0.06) 18% 18.25%, transparent 18.25%);
+      opacity: 0.42;
+      transform: rotate(-8deg);
+      z-index: -1;
+    }
+
+    .topbar {
+      height: 8.2%;
+      min-height: 56px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 18px 8px;
+      border-bottom: 1px solid rgba(238, 247, 239, 0.12);
+      background: linear-gradient(180deg, rgba(5, 12, 10, 0.92), rgba(5, 12, 10, 0.56));
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .crest {
+      width: 40px;
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      color: #07100d;
+      background:
+        linear-gradient(135deg, var(--lime), #f8ffbf 48%, var(--cyan));
+      clip-path: polygon(50% 0, 92% 19%, 82% 83%, 50% 100%, 18% 83%, 8% 19%);
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(17px, 1.55vw, 27px);
+      line-height: 1.05;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: clamp(10px, 0.82vw, 13px);
+      white-space: nowrap;
+    }
+
+    .scorebug {
+      display: grid;
+      grid-template-columns: 86px 82px 86px;
+      align-items: stretch;
+      text-align: center;
+      border: 1px solid rgba(238, 247, 239, 0.18);
+      background: rgba(4, 9, 8, 0.64);
+      box-shadow: inset 0 -1px 0 rgba(255,255,255,0.08);
+    }
+
+    .team,
+    .clock {
+      padding: 8px 10px;
+      min-width: 0;
+    }
+
+    .team {
+      font-weight: 900;
+      font-size: clamp(15px, 1.2vw, 22px);
+    }
+
+    .team small,
+    .clock small {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .clock {
+      color: #06100d;
+      background: var(--lime);
+      font-weight: 900;
+      font-size: clamp(14px, 1.08vw, 19px);
+    }
+
+    .top-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .icon-btn {
+      width: clamp(34px, 2.65vw, 44px);
+      aspect-ratio: 1;
+      border: 1px solid rgba(238, 247, 239, 0.18);
+      color: var(--ink);
+      background: rgba(238, 247, 239, 0.08);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+
+    .icon-btn:hover,
+    .mode-button:hover,
+    .tab:hover {
+      transform: translateY(-1px);
+      border-color: rgba(214,242,95,0.62);
+      background: rgba(214,242,95,0.12);
+    }
+
+    .icon {
+      position: relative;
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+
+    .icon-record {
+      border-radius: 999px;
+      background: var(--red);
+      box-shadow: 0 0 18px rgba(255,76,76,0.72);
+    }
+
+    .icon-pause::before,
+    .icon-pause::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      width: 5px;
+      background: currentColor;
+    }
+
+    .icon-pause::before { left: 3px; }
+    .icon-pause::after { right: 3px; }
+
+    .icon-flag::before {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 2px;
+      width: 3px;
+      height: 15px;
+      background: currentColor;
+    }
+
+    .icon-flag::after {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 2px;
+      width: 10px;
+      height: 8px;
+      background: var(--amber);
+      clip-path: polygon(0 0, 100% 20%, 72% 58%, 100% 100%, 0 82%);
+    }
+
+    .icon-export::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      right: 4px;
+      bottom: 2px;
+      height: 5px;
+      border: 2px solid currentColor;
+      border-top: 0;
+    }
+
+    .icon-export::after {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 1px;
+      width: 8px;
+      height: 10px;
+      border-right: 3px solid currentColor;
+      border-bottom: 3px solid currentColor;
+      transform: rotate(45deg);
+    }
+
+    .workspace {
+      height: 91.8%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 12px 16px 16px;
+      gap: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+    }
+
+    .tab {
+      border: 1px solid rgba(238, 247, 239, 0.18);
+      color: var(--muted);
+      background: rgba(238, 247, 239, 0.06);
+      padding: 9px 14px;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: clamp(12px, 0.9vw, 15px);
+      letter-spacing: 0;
+      transition: transform 160ms ease, background 160ms ease, color 160ms ease, border-color 160ms ease;
+    }
+
+    .tab.active {
+      color: #07100d;
+      background: var(--lime);
+      border-color: var(--lime);
+    }
+
+    .tab-spacer {
+      flex: 1;
+    }
+
+    .signal {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: clamp(10px, 0.8vw, 13px);
+      font-weight: 800;
+    }
+
+    .signal::before {
+      content: "";
+      width: 8px;
+      aspect-ratio: 1;
+      border-radius: 999px;
+      background: var(--red);
+      box-shadow: 0 0 16px rgba(255,76,76,0.9);
+      animation: pulse 1.25s ease-in-out infinite;
+    }
+
+    .view {
+      display: none;
+      min-height: 0;
+    }
+
+    .view.active {
+      display: grid;
+      animation: enter 420ms ease both;
+    }
+
+    .live-grid {
+      grid-template-columns: minmax(0, 2.1fr) minmax(330px, 0.9fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 12px;
+    }
+
+    .main-output {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .side-stack {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .bottom-console {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1.1fr;
+      gap: 12px;
+      min-height: clamp(118px, 15.4vh, 156px);
+    }
+
+    .video-panel,
+    .console-strip,
+    .editing-panel,
+    .metric-board {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(238, 247, 239, 0.16);
+      background: linear-gradient(180deg, rgba(8,17,14,0.82), rgba(5,12,10,0.72));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+    }
+
+    .video-head {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(238, 247, 239, 0.12);
+      background: rgba(0,0,0,0.26);
+      font-size: clamp(11px, 0.82vw, 14px);
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .source {
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 11px;
+    }
+
+    .video-canvas {
+      height: calc(100% - 38px);
+      min-height: 0;
+      padding: 10px;
+      display: grid;
+    }
+
+    .frame {
+      position: relative;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      width: 100%;
+      max-height: 100%;
+      align-self: center;
+      justify-self: center;
+      border: 1px solid rgba(238, 247, 239, 0.16);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 50% 0 / 80px 100%,
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 54px, rgba(255,255,255,0.05) 54px 108px),
+        linear-gradient(135deg, var(--pitch-deep), var(--pitch) 52%, #0a2e22);
+    }
+
+    .field-lines {
+      position: absolute;
+      inset: 7%;
+      border: 2px solid var(--line);
+    }
+
+    .field-lines::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      border-left: 2px solid var(--line);
+    }
+
+    .field-lines::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 18%;
+      aspect-ratio: 1;
+      border: 2px solid var(--line);
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+    }
+
+    .box-left,
+    .box-right {
+      position: absolute;
+      top: 28%;
+      width: 12%;
+      height: 44%;
+      border: 2px solid var(--line);
+    }
+
+    .box-left {
+      left: 7%;
+      border-left: 0;
+    }
+
+    .box-right {
+      right: 7%;
+      border-right: 0;
+    }
+
+    .track {
+      position: absolute;
+      left: 36%;
+      top: 38%;
+      width: 34%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--amber));
+      transform: rotate(-14deg);
+      transform-origin: left center;
+      filter: drop-shadow(0 0 8px rgba(69,217,255,0.5));
+    }
+
+    .track::after {
+      content: "";
+      position: absolute;
+      right: -7px;
+      top: -5px;
+      width: 12px;
+      aspect-ratio: 1;
+      background: var(--amber);
+      clip-path: polygon(0 0, 100% 50%, 0 100%);
+    }
+
+    .player,
+    .ball {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      color: #03120d;
+      font-size: clamp(8px, 0.72vw, 12px);
+      font-weight: 900;
+      box-shadow: 0 0 14px rgba(0,0,0,0.42);
+    }
+
+    .player {
+      width: clamp(20px, 2vw, 34px);
+      aspect-ratio: 1;
+      border-radius: 50% 50% 45% 45%;
+      background: var(--lime);
+      border: 2px solid rgba(255,255,255,0.68);
+    }
+
+    .player.away {
+      background: var(--blue);
+      color: #f7fbff;
+    }
+
+    .ball {
+      width: clamp(10px, 0.92vw, 17px);
+      aspect-ratio: 1;
+      border-radius: 999px;
+      background: #f6f6f6;
+      border: 2px solid #121212;
+      animation: ballMove 3.4s ease-in-out infinite alternate;
+    }
+
+    .target-box {
+      position: absolute;
+      border: 2px solid var(--cyan);
+      box-shadow: 0 0 16px rgba(69,217,255,0.42), inset 0 0 16px rgba(69,217,255,0.12);
+    }
+
+    .target-box::before {
+      content: attr(data-label);
+      position: absolute;
+      left: -2px;
+      bottom: calc(100% + 3px);
+      padding: 2px 6px;
+      color: #04100d;
+      background: var(--cyan);
+      font-size: 10px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .face-box {
+      border-color: var(--amber);
+      box-shadow: 0 0 16px rgba(255,189,74,0.48), inset 0 0 18px rgba(255,189,74,0.16);
+    }
+
+    .face-box::before {
+      background: var(--amber);
+    }
+
+    .lower-third {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 16px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: rgba(2, 8, 7, 0.72);
+      border-left: 4px solid var(--lime);
+      backdrop-filter: blur(8px);
+    }
+
+    .mode-chip {
+      color: #07100d;
+      background: var(--lime);
+      padding: 7px 10px;
+      font-weight: 900;
+      min-width: 94px;
+      text-align: center;
+    }
+
+    .reason {
+      min-width: 0;
+      font-size: clamp(11px, 0.82vw, 14px);
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .rec {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--red);
+      font-weight: 900;
+    }
+
+    .rec::before {
+      content: "";
+      width: 9px;
+      aspect-ratio: 1;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .zoom-window {
+      position: absolute;
+      inset: 20% 28% 18% 28%;
+      border: 2px solid var(--amber);
+      background: rgba(255,189,74,0.05);
+      box-shadow: 0 0 24px rgba(255,189,74,0.28);
+    }
+
+    .closeup-shade {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 54% 42%, transparent 0 22%, rgba(0,0,0,0.45) 49%, rgba(0,0,0,0.68) 100%);
+    }
+
+    .console-strip {
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .strip-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: clamp(10px, 0.78vw, 12px);
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .mode-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+    }
+
+    .mode-button {
+      border: 1px solid rgba(238, 247, 239, 0.18);
+      color: var(--ink);
+      background: rgba(238, 247, 239, 0.07);
+      padding: 9px 8px;
+      cursor: pointer;
+      font-weight: 900;
+      font-size: clamp(10px, 0.78vw, 13px);
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+
+    .mode-button.active {
+      color: #07100d;
+      background: var(--cyan);
+      border-color: var(--cyan);
+    }
+
+    .timeline {
+      position: relative;
+      height: 62px;
+      margin-top: 2px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      right: 4px;
+      top: 31px;
+      height: 2px;
+      background: rgba(238, 247, 239, 0.18);
+    }
+
+    .event-dot {
+      position: absolute;
+      top: 20px;
+      width: 22px;
+      aspect-ratio: 1;
+      transform: translateX(-50%);
+      border: 2px solid rgba(7, 16, 13, 0.9);
+      border-radius: 999px;
+      background: var(--amber);
+      box-shadow: 0 0 18px rgba(255,189,74,0.42);
+      cursor: pointer;
+    }
+
+    .event-dot:nth-child(2n) {
+      background: var(--cyan);
+      box-shadow: 0 0 18px rgba(69,217,255,0.42);
+    }
+
+    .event-dot.active {
+      background: var(--red);
+      box-shadow: 0 0 22px rgba(255,76,76,0.72);
+      transform: translateX(-50%) scale(1.18);
+    }
+
+    .event-dot span {
+      position: absolute;
+      left: 50%;
+      top: 25px;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .queue {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+
+    .queue-item {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(238, 247, 239, 0.14);
+      background: rgba(238, 247, 239, 0.055);
+    }
+
+    .queue-item strong {
+      display: block;
+      color: var(--ink);
+      font-size: clamp(11px, 0.8vw, 13px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .queue-item span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .metrics-mini {
+      display: grid;
+      gap: 8px;
+    }
+
+    .meter {
+      display: grid;
+      grid-template-columns: 82px 1fr 42px;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .bar {
+      height: 8px;
+      background: rgba(238, 247, 239, 0.12);
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--lime), var(--cyan));
+    }
+
+    .editing-view {
+      grid-template-columns: 1.08fr 1.18fr 0.74fr;
+      gap: 12px;
+    }
+
+    .editing-panel,
+    .metric-board {
+      min-height: 0;
+      padding: 14px;
+    }
+
+    .metric-board {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 0;
+    }
+
+    .metric-board.metric-with-field {
+      grid-template-rows: auto auto auto minmax(180px, 1fr);
+      gap: 10px;
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      font-size: clamp(15px, 1.2vw, 22px);
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .section-kicker {
+      color: var(--muted);
+      font-size: clamp(10px, 0.78vw, 13px);
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+
+    .highlight-list {
+      display: grid;
+      gap: 9px;
+      max-height: calc(100% - 66px);
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .highlight-card {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid rgba(238, 247, 239, 0.15);
+      background: rgba(238, 247, 239, 0.055);
+    }
+
+    .badge {
+      min-width: 52px;
+      padding: 7px 8px;
+      text-align: center;
+      color: #07100d;
+      background: var(--amber);
+      font-weight: 900;
+      font-size: 12px;
+    }
+
+    .badge.goal { background: var(--red); color: #fff; }
+    .badge.shoot { background: var(--cyan); }
+    .badge.save { background: var(--lime); }
+
+    .highlight-main {
+      min-width: 0;
+    }
+
+    .highlight-main strong {
+      display: block;
+      font-size: clamp(12px, 0.86vw, 15px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .highlight-main span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .score {
+      font-size: clamp(16px, 1.35vw, 24px);
+      color: var(--lime);
+      font-weight: 900;
+    }
+
+    .explain-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 9px;
+    }
+
+    .explain-tile {
+      min-height: 72px;
+      padding: 10px;
+      border: 1px solid rgba(238, 247, 239, 0.14);
+      background: rgba(238, 247, 239, 0.052);
+    }
+
+    .explain-tile span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .explain-tile strong {
+      display: block;
+      margin-top: 7px;
+      font-size: clamp(16px, 1.4vw, 26px);
+      line-height: 1;
+    }
+
+    .player-card {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid rgba(238, 247, 239, 0.16);
+      background: rgba(238, 247, 239, 0.05);
+    }
+
+    .portrait {
+      aspect-ratio: 1;
+      border: 2px solid rgba(238, 247, 239, 0.18);
+      background:
+        radial-gradient(circle at 50% 34%, #f0c498 0 16%, transparent 17%),
+        radial-gradient(ellipse at 50% 76%, var(--blue) 0 32%, transparent 33%),
+        linear-gradient(160deg, rgba(69,217,255,0.28), rgba(214,242,95,0.16));
+    }
+
+    .player-card h3 {
+      margin: 0;
+      font-size: clamp(18px, 1.5vw, 27px);
+      line-height: 1.05;
+    }
+
+    .player-card p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .metric-view {
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: 12px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .metric-big {
+      padding: 14px;
+      border: 1px solid rgba(238, 247, 239, 0.15);
+      background: rgba(238, 247, 239, 0.055);
+    }
+
+    .metric-big span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .metric-big strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--lime);
+      font-size: clamp(26px, 3vw, 52px);
+      line-height: 0.95;
+    }
+
+    .matrix {
+      display: grid;
+      gap: 9px;
+    }
+
+    .matrix-row {
+      display: grid;
+      grid-template-columns: 168px 1fr 54px;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .matrix-row strong {
+      color: var(--ink);
+      font-weight: 900;
+    }
+
+    .ghost-field {
+      position: relative;
+      min-height: 0;
+      height: 100%;
+      border: 1px solid rgba(238, 247, 239, 0.15);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 50% 0 / 82px 100%,
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 54px, rgba(255,255,255,0.05) 54px 108px),
+        linear-gradient(135deg, #082018, #17482f);
+      overflow: hidden;
+    }
+
+    .heat {
+      position: absolute;
+      width: 22%;
+      aspect-ratio: 1;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(255,76,76,0.7), rgba(255,189,74,0.24) 44%, transparent 72%);
+      filter: blur(2px);
+    }
+
+    .heat.one { left: 58%; top: 22%; }
+    .heat.two { left: 37%; top: 48%; width: 18%; }
+    .heat.three { left: 72%; top: 53%; width: 15%; }
+
+    @keyframes enter {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.38; }
+    }
+
+    @keyframes ballMove {
+      from { transform: translate(-6px, 5px); }
+      to { transform: translate(28px, -18px); }
+    }
+
+    @media (max-width: 1100px) {
+      .topbar {
+        grid-template-columns: 1fr auto;
+      }
+
+      .top-actions {
+        display: none;
+      }
+
+      .live-grid {
+        grid-template-columns: minmax(0, 1.78fr) minmax(280px, 0.82fr);
+      }
+
+      .bottom-console {
+        grid-template-columns: 1.1fr 1fr 0.9fr;
+      }
+
+      .queue {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage" aria-label="足球自动转播导播台原型">
+    <header class="topbar">
+      <div class="brand">
+        <div class="crest">FAB</div>
+        <div>
+          <h1>足球自动转播导播台</h1>
+          <div class="subtitle">Match-aware automatic director / live output / personal and full-match highlights</div>
+        </div>
+      </div>
+      <div class="scorebug" aria-label="比赛比分">
+        <div class="team">HOME<small>校园队</small></div>
+        <div class="clock">67:42<small>2nd HALF</small></div>
+        <div class="team">AWAY<small>训练队</small></div>
+      </div>
+      <div class="top-actions" aria-label="导播快捷操作">
+        <button class="icon-btn" type="button" title="开始录制" aria-label="开始录制"><span class="icon icon-record"></span></button>
+        <button class="icon-btn" type="button" title="暂停画面" aria-label="暂停画面"><span class="icon icon-pause"></span></button>
+        <button class="icon-btn" type="button" title="标记高光" aria-label="标记高光"><span class="icon icon-flag"></span></button>
+        <button class="icon-btn" type="button" title="导出剪辑" aria-label="导出剪辑"><span class="icon icon-export"></span></button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <nav class="tabs" aria-label="页面视图">
+        <button class="tab active" type="button" data-tab="live">实时导播</button>
+        <button class="tab" type="button" data-tab="global">全场高光</button>
+        <button class="tab" type="button" data-tab="personal">个人高光</button>
+        <button class="tab" type="button" data-tab="metrics">评估指标</button>
+        <span class="tab-spacer"></span>
+        <span class="signal">REC 1080P / 30FPS / LOW LATENCY</span>
+      </nav>
+
+      <div class="view live-grid active" id="live">
+        <section class="video-panel main-output">
+          <div class="video-head">
+            <span>自动转播输出</span>
+            <span class="source" id="decisionLabel">AUTO | close-up trigger | face + threat zone</span>
+          </div>
+          <div class="video-canvas">
+            <div class="frame" aria-label="自动转播画面模拟">
+              <div class="field-lines"></div>
+              <div class="box-left"></div>
+              <div class="box-right"></div>
+              <div class="track"></div>
+              <span class="player" style="left:42%;top:43%;">8</span>
+              <span class="player away" style="left:51%;top:38%;">5</span>
+              <span class="player" style="left:62%;top:34%;">11</span>
+              <span class="player away" style="left:69%;top:51%;">3</span>
+              <span class="ball" style="left:59%;top:41%;"></span>
+              <span class="target-box" data-label="BALL 0.86" style="left:58.2%;top:39.4%;width:4.2%;height:7.4%;"></span>
+              <span class="target-box" data-label="PLAYER 11" style="left:60.2%;top:30.6%;width:8.8%;height:19%;"></span>
+              <div class="lower-third">
+                <span class="mode-chip" id="modeChip">CLOSE-UP</span>
+                <span class="reason" id="reasonText">禁区威胁升高，球员密度集中，切入特写确认关键动作</span>
+                <span class="rec">REC</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-stack">
+          <section class="video-panel">
+            <div class="video-head">
+              <span>全景画面</span>
+              <span class="source">UGREEN Camera 1080P</span>
+            </div>
+            <div class="video-canvas">
+              <div class="frame" aria-label="全景画面模拟">
+                <div class="field-lines"></div>
+                <div class="box-left"></div>
+                <div class="box-right"></div>
+                <div class="zoom-window"></div>
+                <span class="player" style="left:28%;top:35%;">6</span>
+                <span class="player away" style="left:39%;top:54%;">10</span>
+                <span class="player" style="left:53%;top:42%;">8</span>
+                <span class="player away" style="left:62%;top:38%;">5</span>
+                <span class="player" style="left:72%;top:47%;">11</span>
+                <span class="ball" style="left:63%;top:43%;"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="video-panel">
+            <div class="video-head">
+              <span>球员特写画面</span>
+              <span class="source">UVC Camera</span>
+            </div>
+            <div class="video-canvas">
+              <div class="frame" aria-label="球员特写画面模拟">
+                <div class="field-lines"></div>
+                <div class="closeup-shade"></div>
+                <span class="player" style="left:43%;top:35%;width:16%;font-size:18px;">11</span>
+                <span class="player away" style="left:58%;top:43%;width:13%;font-size:15px;">3</span>
+                <span class="target-box face-box" data-label="FACE calm" style="left:39%;top:21%;width:21%;height:33%;"></span>
+                <span class="target-box" data-label="PLAYER" style="left:37%;top:28%;width:29%;height:55%;"></span>
+              </div>
+            </div>
+          </section>
+        </aside>
+
+        <section class="console-strip">
+          <div class="strip-title"><span>Director Mode</span><span id="holdLabel">hold 2.5s</span></div>
+          <div class="mode-row">
+            <button class="mode-button active" type="button" data-mode="AUTO">AUTO</button>
+            <button class="mode-button" type="button" data-mode="PANORAMA">PANORAMA</button>
+            <button class="mode-button" type="button" data-mode="FOLLOW">FOLLOW</button>
+            <button class="mode-button" type="button" data-mode="REPLAY">REPLAY</button>
+          </div>
+        </section>
+
+        <section class="console-strip">
+          <div class="strip-title"><span>Event Timeline</span><span>46.4s window</span></div>
+          <div class="timeline" id="timeline" aria-label="高光事件时间轴"></div>
+        </section>
+
+        <section class="console-strip">
+          <div class="strip-title"><span>Live Metrics</span><span>JSON mapped</span></div>
+          <div class="metrics-mini">
+            <div class="meter"><span>目标入镜率</span><div class="bar"><span style="width:100%"></span></div><strong>100%</strong></div>
+            <div class="meter"><span>回放评分</span><div class="bar"><span style="width:88.8%"></span></div><strong>0.89</strong></div>
+            <div class="meter"><span>事件密度</span><div class="bar"><span style="width:82%"></span></div><strong>27.4</strong></div>
+            <div class="meter"><span>处理延迟</span><div class="bar"><span style="width:34%"></span></div><strong>86ms</strong></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view editing-view" id="global">
+        <section class="editing-panel">
+          <h2 class="section-title">全场高光剪辑</h2>
+          <div class="section-kicker">来自 highlight_report.json：20 个事件，1074 帧已渲染</div>
+          <div class="highlight-list" id="globalList"></div>
+        </section>
+        <section class="editing-panel">
+          <h2 class="section-title">解释性高光评分</h2>
+          <div class="section-kicker">事件类型、危险区域、连续性、比分影响、回放价值共同决定剪辑顺序</div>
+          <div class="explain-grid">
+            <div class="explain-tile"><span>Replay Score</span><strong>0.8875</strong></div>
+            <div class="explain-tile"><span>Average Duration</span><strong>5.0s</strong></div>
+            <div class="explain-tile"><span>Event Density</span><strong>27.4/min</strong></div>
+            <div class="explain-tile"><span>Target Visibility</span><strong>100%</strong></div>
+          </div>
+        </section>
+        <section class="editing-panel">
+          <h2 class="section-title">剪辑输出包</h2>
+          <div class="section-kicker">用于答辩展示和赛后复盘</div>
+          <div class="queue">
+            <div class="queue-item"><strong>broadcast_record.mp4</strong><span>实时导播输出</span></div>
+            <div class="queue-item"><strong>highlight.mp4</strong><span>全场高光回放</span></div>
+            <div class="queue-item"><strong>highlight_report.json</strong><span>指标与事件元数据</span></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view editing-view" id="personal">
+        <section class="editing-panel">
+          <h2 class="section-title">个人高光剪辑</h2>
+          <div class="player-card">
+            <div class="portrait" aria-label="球员头像占位"></div>
+            <div>
+              <h3>11 号前锋</h3>
+              <p>选中球员 / 进攻三区 / 参与 8 个高价值片段</p>
+            </div>
+          </div>
+          <div class="highlight-list" id="personalList"></div>
+        </section>
+        <section class="editing-panel">
+          <h2 class="section-title">教练复盘视角</h2>
+          <div class="section-kicker">个人高光保留全景上下文，避免只看射门结果</div>
+          <div class="explain-grid">
+            <div class="explain-tile"><span>前插跑动</span><strong>6</strong></div>
+            <div class="explain-tile"><span>触球前压力</span><strong>中高</strong></div>
+            <div class="explain-tile"><span>关键区域出现</span><strong>73%</strong></div>
+            <div class="explain-tile"><span>可剪辑片段</span><strong>8</strong></div>
+          </div>
+        </section>
+        <section class="editing-panel">
+          <h2 class="section-title">个人输出</h2>
+          <div class="section-kicker">用于球员训练反馈</div>
+          <div class="queue">
+            <div class="queue-item"><strong>personal_highlight.mp4</strong><span>球员专属片段</span></div>
+            <div class="queue-item"><strong>personal_highlight_report.json</strong><span>参与事件明细</span></div>
+            <div class="queue-item"><strong>coach_review_notes</strong><span>跑位与威胁说明</span></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view metric-view" id="metrics">
+        <section class="metric-board metric-with-field">
+          <h2 class="section-title">自动转播与高光评估</h2>
+          <div class="section-kicker">不只看检测准确率，也评估画面质量、剪辑相关性和观看体验</div>
+          <div class="metric-grid">
+            <div class="metric-big"><span>Ball-in-frame</span><strong>96%</strong></div>
+            <div class="metric-big"><span>Key-player-in-frame</span><strong>91%</strong></div>
+            <div class="metric-big"><span>Switch Smoothness</span><strong>87</strong></div>
+            <div class="metric-big"><span>Viewer Score</span><strong>4.5</strong></div>
+          </div>
+        </section>
+        <section class="metric-board">
+          <h2 class="section-title">指标矩阵</h2>
+          <div class="section-kicker">面向普通观众和教练复盘的双重评价体系</div>
+          <div class="matrix">
+            <div class="matrix-row"><strong>关键事件漏检率</strong><div class="bar"><span style="width:12%;background:linear-gradient(90deg,var(--red),var(--amber))"></span></div><span>12%</span></div>
+            <div class="matrix-row"><strong>切换抖动次数</strong><div class="bar"><span style="width:18%"></span></div><span>低</span></div>
+            <div class="matrix-row"><strong>战术信息保留</strong><div class="bar"><span style="width:84%"></span></div><span>84%</span></div>
+            <div class="matrix-row"><strong>高光冗余控制</strong><div class="bar"><span style="width:78%"></span></div><span>78%</span></div>
+            <div class="matrix-row"><strong>处理延迟</strong><div class="bar"><span style="width:34%"></span></div><span>86ms</span></div>
+          </div>
+          <div class="ghost-field" aria-label="场地区域热力图">
+            <div class="field-lines"></div>
+            <div class="box-left"></div>
+            <div class="box-right"></div>
+            <span class="heat one"></span>
+            <span class="heat two"></span>
+            <span class="heat three"></span>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const report = {
+      video: { width: 1920, height: 1080, fps: 30 },
+      metrics: {
+        average_duration_seconds: 5,
+        event_density_per_minute: 27.4041,
+        target_visibility: 1,
+        replay_score: 0.8875
+      },
+      highlights: [
+        { type: "save", start_time: 2.582, end_time: 7.582, target: { x: 320, y: 239, width: 32, height: 158 }, related_target_count: 2 },
+        { type: "shoot", start_time: 4.636, end_time: 9.636, target: { x: 371, y: 100, width: 709, height: 620 }, related_target_count: 8 },
+        { type: "save", start_time: 8.716, end_time: 13.716, target: { x: 655, y: 84, width: 621, height: 636 }, related_target_count: 8 },
+        { type: "goal", start_time: 14.844, end_time: 19.844, target: { x: 742, y: 329, width: 489, height: 391 }, related_target_count: 8 },
+        { type: "shoot", start_time: 25.052, end_time: 30.052, target: { x: 592, y: 236, width: 599, height: 381 }, related_target_count: 8 },
+        { type: "save", start_time: 37.292, end_time: 42.292, target: { x: 0, y: 0, width: 1280, height: 720 }, related_target_count: 8 }
+      ]
+    };
+
+    const decisions = {
+      AUTO: {
+        chip: "CLOSE-UP",
+        reason: "禁区威胁升高，球员密度集中，切入特写确认关键动作",
+        label: "AUTO | close-up trigger | face + threat zone",
+        hold: "hold 2.5s"
+      },
+      PANORAMA: {
+        chip: "PANORAMA",
+        reason: "保持全景战术视角，展示进攻方向、站位和弱侧空间",
+        label: "MANUAL | panorama camera | tactical context",
+        hold: "manual lock"
+      },
+      FOLLOW: {
+        chip: "FOLLOW",
+        reason: "虚拟镜头围绕球与主要进攻区域平滑移动",
+        label: "AUTO | smooth ROI crop | ball + player cluster",
+        hold: "smoothing 5 frames"
+      },
+      REPLAY: {
+        chip: "REPLAY",
+        reason: "回放高光候选片段，保留事件前 3 秒和事件后 4 秒",
+        label: "POST | highlight replay | pre-roll + post-roll",
+        hold: "clip 7.0s"
+      }
+    };
+
+    const cnType = {
+      save: "扑救",
+      shoot: "射门",
+      goal: "进球"
+    };
+
+    function formatTime(value) {
+      return `${value.toFixed(1)}s`;
+    }
+
+    function scoreFor(item, index) {
+      const zone = Math.min(1, (item.target.width * item.target.height) / (1280 * 720));
+      const related = Math.min(1, item.related_target_count / 8);
+      const typeWeight = item.type === "goal" ? 1 : item.type === "shoot" ? 0.88 : 0.82;
+      return Math.min(0.99, 0.52 + zone * 0.18 + related * 0.18 + typeWeight * 0.1 - index * 0.012);
+    }
+
+    function makeHighlightCard(item, index) {
+      const type = cnType[item.type] || item.type;
+      const score = scoreFor(item, index).toFixed(2);
+      const target = `目标框 x:${item.target.x} y:${item.target.y} w:${item.target.width} h:${item.target.height}`;
+      return `
+        <article class="highlight-card">
+          <span class="badge ${item.type}">${type}</span>
+          <div class="highlight-main">
+            <strong>${formatTime(item.start_time)} - ${formatTime(item.end_time)} / 相关目标 ${item.related_target_count}</strong>
+            <span>${target}</span>
+          </div>
+          <strong class="score">${score}</strong>
+        </article>
+      `;
+    }
+
+    function renderLists() {
+      const globalList = document.querySelector("#globalList");
+      const personalList = document.querySelector("#personalList");
+      globalList.innerHTML = report.highlights.map(makeHighlightCard).join("");
+      personalList.innerHTML = report.highlights
+        .filter((item, index) => item.type !== "save" || index % 2 === 0)
+        .map(makeHighlightCard)
+        .join("");
+    }
+
+    function renderTimeline() {
+      const timeline = document.querySelector("#timeline");
+      timeline.innerHTML = report.highlights.map((item, index) => {
+        const left = 8 + index * (84 / Math.max(1, report.highlights.length - 1));
+        return `<button class="event-dot ${index === 1 ? "active" : ""}" style="left:${left}%" title="${cnType[item.type]} ${formatTime(item.start_time)}" aria-label="${cnType[item.type]} ${formatTime(item.start_time)}"><span>${formatTime(item.start_time)}</span></button>`;
+      }).join("");
+
+      timeline.querySelectorAll(".event-dot").forEach((dot, index) => {
+        dot.addEventListener("click", () => {
+          timeline.querySelectorAll(".event-dot").forEach(node => node.classList.remove("active"));
+          dot.classList.add("active");
+          const item = report.highlights[index];
+          document.querySelector("#decisionLabel").textContent = `EVENT | ${cnType[item.type]} | ${formatTime(item.start_time)} - ${formatTime(item.end_time)}`;
+          document.querySelector("#reasonText").textContent = `${cnType[item.type]}片段已进入高光候选队列，相关目标 ${item.related_target_count} 个，回放评分 ${scoreFor(item, index).toFixed(2)}`;
+          document.querySelector("#modeChip").textContent = "REPLAY";
+        });
+      });
+    }
+
+    function bindTabs() {
+      document.querySelectorAll(".tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+          document.querySelectorAll(".tab").forEach(node => node.classList.remove("active"));
+          document.querySelectorAll(".view").forEach(node => node.classList.remove("active"));
+          tab.classList.add("active");
+          document.querySelector(`#${tab.dataset.tab}`).classList.add("active");
+        });
+      });
+    }
+
+    function bindModes() {
+      document.querySelectorAll(".mode-button").forEach(button => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".mode-button").forEach(node => node.classList.remove("active"));
+          button.classList.add("active");
+          const decision = decisions[button.dataset.mode];
+          document.querySelector("#modeChip").textContent = decision.chip;
+          document.querySelector("#reasonText").textContent = decision.reason;
+          document.querySelector("#decisionLabel").textContent = decision.label;
+          document.querySelector("#holdLabel").textContent = decision.hold;
+        });
+      });
+    }
+
+    renderLists();
+    renderTimeline();
+    bindTabs();
+    bindModes();
+  </script>
+</body>
+</html>

@@ -30,3 +30,17 @@
 *.exe
 *.out
 *.app
+
+# Build and IDE output
+build/
+.vscode/
+docx_render_check/
+
+# Logs
+*.log
+
+# Runtime generated media and reports
+*_record.mp4
+highlight.mp4
+highlight_report.json
+personal_highlight_report.json
