@@ -1,82 +1,101 @@
-
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <ctime>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
-#include <ctime>
 
-// 全局常量
 const int VIDEO_WIDTH = 1920;
 const int VIDEO_HEIGHT = 1080;
 const int FPS = 30;
-const int TRANS_DELAY = 200;     // 转播切换延迟(ms)
-const int CLOSEUP_DURATION = 2;  // 特写持续时间(s)
+const int TRANS_DELAY = 200;
+const int CLOSEUP_DURATION = 2;
 
-// 高光事件类型
 enum class HighlightType {
     NONE,
-    SHOOT,   // 射门
-    SAVE,    // 扑救
-    GOAL     // 进球
+    SHOOT,
+    SAVE,
+    GOAL
 };
 
-// 表情类型
 enum class EmotionType {
     UNKNOWN,
-    HAPPY,   // 开心/庆祝
-    SAD,     // 失落/遗憾
-    CALM     // 平静
+    HAPPY,
+    SAD,
+    CALM
 };
 
-// 目标类型
 enum class TargetType {
-    BALL,        // 足球
-    PLAYER,      // 射门球员
-    GOALKEEPER,  // 门将
-    PERSON       // 观众
+    BALL,
+    PLAYER,
+    GOALKEEPER,
+    PERSON
 };
 
-// 目标检测结果
 struct TargetInfo {
-    TargetType type;
+    TargetType type = TargetType::PLAYER;
     cv::Rect box;
-    double confidence;
-    double timestamp;
+    double confidence = 0.0;
+    double timestamp = 0.0;
 };
 
-// 高光事件信息
 struct HighlightInfo {
-    HighlightType type;
-    double start_time;
-    double end_time;
+    HighlightType type = HighlightType::NONE;
+    double start_time = 0.0;
+    double end_time = 0.0;
     cv::Rect main_target;
     std::vector<TargetInfo> related_targets;
 };
 
-// 人脸/特写信息
 struct FaceInfo {
-    EmotionType emotion;
+    EmotionType emotion = EmotionType::UNKNOWN;
     cv::Rect face_box;
     cv::Mat closeup_img;
-    double timestamp;
-    std::string belong; // "player"/"goalkeeper"/"audience"
+    double timestamp = 0.0;
+    std::string belong;
 };
 
-// 转播模式
+struct EvaluationMetrics {
+    int highlight_count = 0;
+    int rendered_frame_count = 0;
+    double average_duration = 0.0;
+    double event_density = 0.0;
+    double target_visibility = 0.0;
+    double replay_score = 0.0;
+};
+
 enum class BroadcastMode {
-    NORMAL,   // 常规近景
-    FOLLOW,   // 重点跟拍
-    CLOSEUP   // 高光特写
+    NORMAL,
+    FOLLOW,
+    CLOSEUP
 };
 
-// 公共工具函数
+enum class CameraRole {
+    PANORAMA,
+    CLOSEUP
+};
+
+struct DualCameraFrame {
+    cv::Mat panorama;
+    cv::Mat closeup;
+    double timestamp = 0.0;
+};
+
+struct BroadcastDecision {
+    BroadcastMode mode = BroadcastMode::NORMAL;
+    std::string reason = "panorama";
+    double hold_until = 0.0;
+};
+
 namespace CommonTool {
     double getCurrentTimestamp();
     cv::Mat imageSharpen(const cv::Mat& img);
     std::string highlightType2Str(HighlightType type);
     std::string emotionType2Str(EmotionType type);
+    std::string targetType2Str(TargetType type);
+    std::string broadcastMode2Str(BroadcastMode mode);
+    std::string cameraRole2Str(CameraRole role);
 }
 
-#endif // COMMON_H
+#endif
