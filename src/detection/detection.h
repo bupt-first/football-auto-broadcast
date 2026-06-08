@@ -14,6 +14,11 @@ struct DetectionConfig {
     double highlightCooldown = 2.0;
     double fastBallVelocity = 450.0;
     double closePlayerDistance = 110.0;
+    double ballCandidateConfidenceThreshold = 0.20;
+    double confirmedBallConfidenceThreshold = 0.42;
+    double ballPredictionGate = 140.0;
+    double ballLostTimeout = 0.7;
+    int minBallTrackHits = 2;
     int maxTargets = 12;
     bool detectShoot = true;
     bool detectSave = true;
@@ -29,6 +34,7 @@ public:
     bool init(const DetectionConfig& config);
 
     std::vector<TargetInfo> detect(const cv::Mat& frame);
+    std::vector<TargetInfo> detect(const cv::Mat& frame, double timestamp);
     HighlightInfo detectHighlight(const std::vector<TargetInfo>& targets, double timestamp);
 
     void setConfig(const DetectionConfig& config);
@@ -42,9 +48,21 @@ private:
         double velocity = 0.0;
     };
 
+    struct BallTrack {
+        bool active = false;
+        cv::Point2f position;
+        cv::Point2f velocity;
+        cv::Rect box;
+        double confidence = 0.0;
+        double timestamp = 0.0;
+        int hits = 0;
+        int misses = 0;
+    };
+
     cv::Mat preprocessGray(const cv::Mat& frame) const;
     double calculateMotionIntensity(const cv::Mat& diff) const;
     std::vector<TargetInfo> refineTargets(const std::vector<TargetInfo>& rawTargets) const;
+    std::vector<TargetInfo> applyBallTrajectoryGate(const std::vector<TargetInfo>& targets, double timestamp);
     void updateMotionHistory(const std::vector<TargetInfo>& targets, double timestamp);
 
     double calculateTargetVelocity(const TargetInfo& target, double timestamp) const;
@@ -73,6 +91,7 @@ private:
     int motionFrameCount = 0;
     double avgMotionEnergy = 0.0;
     std::vector<MotionHistory> ballMotionHistory;
+    BallTrack ballTrack;
 };
 
 #endif

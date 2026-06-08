@@ -21,6 +21,7 @@
 #include <opencv2/videoio.hpp>
 
 class QCloseEvent;
+class QResizeEvent;
 
 class VideoPane : public QWidget {
 public:
@@ -32,6 +33,7 @@ public:
     int zoomPercent() const;
 
 private:
+    void resizeEvent(QResizeEvent* event) override;
     void updatePixmap();
 
     QLabel* titleLabel = nullptr;
@@ -46,7 +48,7 @@ private:
 enum class OperatorMode {
     AUTO,
     FORCE_PANORAMA,
-    FORCE_CLOSEUP
+    FORCE_FOLLOW
 };
 
 class QtBroadcastWindow : public QMainWindow {
@@ -66,6 +68,7 @@ private:
     QWidget* createHighlightTab(bool personal);
     QWidget* createMetricsTab();
     QWidget* createInfoPanel(const QString& title, const QString& subtitle, QWidget* content);
+    QLabel* createPreviewPlaceholder(const QString& title, const QString& subtitle);
     QLabel* createMetricLabel(const QString& name, const QString& value);
     QListWidget* createHighlightList(bool personal);
     void processFrame();
@@ -85,6 +88,7 @@ private:
         const std::vector<TargetInfo>& closeupTargets,
         const std::vector<FaceInfo>& faces
     );
+    cv::Mat renderVirtualFollowFrame(const cv::Mat& panorama, const std::vector<TargetInfo>& targets) const;
     cv::Mat normalizeFrame(const cv::Mat& frame) const;
     void drawTargets(cv::Mat& frame, const std::vector<TargetInfo>& targets) const;
     void drawFaces(cv::Mat& frame, const std::vector<FaceInfo>& faces) const;
@@ -111,7 +115,7 @@ private:
     QPushButton* replayButton = nullptr;
     QRadioButton* autoModeButton = nullptr;
     QRadioButton* forcePanoramaButton = nullptr;
-    QRadioButton* forceCloseupButton = nullptr;
+    QRadioButton* forceFollowButton = nullptr;
     QLabel* statusLabel = nullptr;
     QLabel* scoreLabel = nullptr;
     QLabel* clockLabel = nullptr;

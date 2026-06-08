@@ -91,6 +91,8 @@ struct BroadcastDecision {
 namespace CommonTool {
     double getCurrentTimestamp();
     cv::Mat imageSharpen(const cv::Mat& img);
+    std::string finalVideoOutputDir();
+    std::string finalVideoOutputPath(const std::string& fileNameOrPath);
     std::string highlightType2Str(HighlightType type);
     std::string emotionType2Str(EmotionType type);
     std::string targetType2Str(TargetType type);

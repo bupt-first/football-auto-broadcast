@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>足球自动转播系统 UI 改版 Mockup</title>
+  <style>
+    :root {
+      --bg: #07100d;
+      --panel: #101918;
+      --panel-2: #13221f;
+      --line: rgba(255,255,255,.14);
+      --text: #f4fbf5;
+      --muted: #a8bab0;
+      --lime: #d8f36b;
+      --green: #4dd7a1;
+      --cyan: #4ccfff;
+      --red: #ff5959;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, rgba(77,215,161,.13), transparent 34%), var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      padding: 28px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }
+    h2 { margin: 28px 0 12px; font-size: 21px; }
+    h3 { margin: 0 0 8px; font-size: 17px; }
+    p { color: var(--muted); line-height: 1.7; }
+    .subtitle { margin: 0 0 18px; }
+    .note {
+      padding: 14px 16px;
+      border-left: 4px solid var(--green);
+      background: rgba(77, 215, 161, 0.10);
+      color: #dff7ef;
+      margin: 12px 0 20px;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .recommended {
+      box-shadow: 0 0 0 2px rgba(77, 215, 161, .45) inset;
+    }
+    .card-image {
+      background: #07100d;
+      min-height: 250px;
+      padding: 12px;
+    }
+    .card-body { padding: 14px; }
+    .tag {
+      display: inline-block;
+      color: #07100d;
+      background: var(--green);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-weight: 800;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .mock-shell {
+      height: 226px;
+      border-radius: 6px;
+      background: #0c1715;
+      border: 1px solid rgba(255,255,255,.12);
+      display: grid;
+      gap: 8px;
+      padding: 8px;
+      font-size: 10px;
+      color: #d8eee4;
+    }
+    .topbar {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px;
+      background: var(--panel-2);
+      border-radius: 4px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .video {
+      background: linear-gradient(135deg, #1f6a42, #193927 60%, #89b95f);
+      border: 2px solid rgba(255,255,255,.18);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #f7fff7;
+      font-weight: 800;
+      aspect-ratio: 16 / 9;
+      min-height: 0;
+    }
+    .side { display: grid; gap: 8px; }
+    .small-video {
+      background: linear-gradient(135deg, #314d4a, #121e1b);
+      border: 1px solid rgba(255,255,255,.18);
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .btn {
+      background: var(--lime);
+      color: #07100d;
+      border-radius: 4px;
+      padding: 6px 3px;
+      text-align: center;
+      font-weight: 800;
+    }
+    .rec { background: var(--red); color: white; }
+    .timeline {
+      background: rgba(255,255,255,.08);
+      border-radius: 4px;
+      padding: 6px;
+      line-height: 1.7;
+    }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+    }
+    .metric {
+      background: rgba(255,255,255,.08);
+      padding: 7px;
+      border-radius: 4px;
+    }
+    .layout {
+      margin-top: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(16,25,24,.82);
+    }
+    .large-mock {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      grid-template-rows: 46px minmax(0, 1fr) 74px;
+      gap: 12px;
+      min-height: 610px;
+    }
+    .large-mock .topbar { height: auto; grid-column: 1 / 3; font-size: 14px; }
+    .main-video {
+      background: linear-gradient(135deg, #1e7c46, #173923 58%, #a0be63);
+      border: 2px solid rgba(255,255,255,.18);
+      border-radius: 6px;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 900;
+      min-height: 0;
+    }
+    .right-stack {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(255,255,255,.06);
+      padding: 10px;
+    }
+    .bottom-controls {
+      grid-column: 1 / 3;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+    .bottom-controls .btn {
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    @media (max-width: 1000px) {
+      body { padding: 16px; }
+      .cards { grid-template-columns: 1fr; }
+      .large-mock { grid-template-columns: 1fr; grid-template-rows: auto; }
+      .large-mock .topbar, .bottom-controls { grid-column: auto; }
+      .bottom-controls { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <h1>足球自动转播系统 UI 改版方向</h1>
+  <p class="subtitle">基于 Word 方案，并结合我们确定的“双固定机位 + 软件虚拟导播 + 统一事件时间线”方向。</p>
+
+  <div class="note">
+    推荐主线：普通用户默认看到“像直播平台一样”的观赛与导出界面；导播原因、高光评分、入镜率、延迟等专业指标收进“专业模式”。机位文案从“云台/特写相机”改成“全景机位、辅助机位、软件跟拍”。
+  </div>
+
+  <h2>三个可选路线</h2>
+  <div class="cards">
+    <div class="card recommended">
+      <div class="card-image">
+        <div class="mock-shell" style="grid-template-rows: 24px 1fr 54px; grid-template-columns: 1fr 220px;">
+          <div class="topbar" style="grid-column: 1 / 3;"><span>校园足球自动转播</span><span>12:08  主队 2 - 1 客队  ● 录制中</span></div>
+          <div class="video">16:9 主直播画面</div>
+          <div class="side">
+            <div class="small-video">全景机位</div>
+            <div class="small-video">辅助机位</div>
+            <div class="timeline">14.8s 进球得分<br>25.1s 精彩进攻</div>
+          </div>
+          <div class="controls" style="grid-column: 1 / 3;">
+            <div class="btn">自动导播</div>
+            <div class="btn">锁定全景</div>
+            <div class="btn">软件跟拍</div>
+            <div class="btn rec">结束录制</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <span class="tag">推荐</span>
+        <h3>A. 普通用户观赛台</h3>
+        <p>主画面最大，右侧只放两个 16:9 机位缩略图和简短高光时间线；底部是大按钮。最适合课堂演示和普通用户使用。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-image">
+        <div class="mock-shell" style="grid-template-rows: 24px 1fr; grid-template-columns: 1fr;">
+          <div class="topbar"><span>实时导播</span><span>当前：软件跟拍</span></div>
+          <div class="video">16:9 主画面</div>
+          <div class="timeline">镜头原因：进攻推进到禁区前沿，保持 2.5 秒</div>
+          <div class="metrics-grid">
+            <div class="metric">画面捕捉：优秀</div>
+            <div class="metric">切换流畅：良好</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>B. 导播解释型</h3>
+        <p>保留更多“为什么切镜头”的说明，能体现创新点，但普通用户界面会更像控制台。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-image">
+        <div class="mock-shell" style="grid-template-rows: 24px 1fr 70px; grid-template-columns: 1fr 1fr;">
+          <div class="topbar" style="grid-column: 1 / 3;"><span>赛后高光工作台</span><span>一键导出 1080P</span></div>
+          <div class="video" style="grid-column: 1 / 3;">16:9 成片预览</div>
+          <div class="timeline">全场高光<br>进球 / 射门 / 扑救</div>
+          <div class="timeline">个人高光<br>号码 / 球员 / 事件</div>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>C. 剪辑优先型</h3>
+        <p>强调全场高光和个人高光生成，适合赛后剪辑，但实时转播的主功能不够突出。</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>推荐落地界面</h2>
+  <div class="layout">
+    <div class="large-mock">
+      <div class="topbar">
+        <strong>校园足球自动转播</strong>
+        <span>上半场 12:08　主队 2 - 1 客队　● 正在录制</span>
+      </div>
+      <div class="main-video">16:9 自动导播输出</div>
+      <div class="right-stack">
+        <div class="panel">
+          <h3>全景机位</h3>
+          <div class="small-video">战术观察画面</div>
+        </div>
+        <div class="panel">
+          <h3>辅助机位</h3>
+          <div class="small-video">禁区/侧面画面</div>
+        </div>
+        <div class="panel">
+          <h3>比赛时间线</h3>
+          <p>14.8s 进球得分<br>25.1s 精彩进攻<br>37.3s 适合回看</p>
+        </div>
+      </div>
+      <div class="bottom-controls">
+        <div class="btn">自动导播</div>
+        <div class="btn">锁定全景</div>
+        <div class="btn">软件跟拍</div>
+        <div class="btn">实时回看</div>
+        <div class="btn rec">结束录制</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

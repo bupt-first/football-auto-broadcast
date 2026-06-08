@@ -74,6 +74,10 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Widgets
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    FINAL_OUTPUT_VIDEO_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output video"
+)
+
 if(EXISTS ${DLib_DIR}/lib/dlib.lib)
     target_link_libraries(${PROJECT_NAME} dlib.lib)
 endif()
