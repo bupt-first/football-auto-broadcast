@@ -3,13 +3,16 @@
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QProgressBar>
+#include <QResizeEvent>
 #include <QSizePolicy>
 #include <QTabWidget>
 #include <QtGlobal>
@@ -40,12 +43,34 @@ QImage matToImage(const cv::Mat& frame) {
 
 QString modeLabel(BroadcastMode mode) {
     if (mode == BroadcastMode::CLOSEUP) {
-        return "Close-up";
+        return "辅助机位";
     }
     if (mode == BroadcastMode::FOLLOW) {
-        return "Follow";
+        return "软件跟拍";
     }
-    return "Panorama";
+    return "全景机位";
+}
+
+QString decisionReasonText(const std::string& reason) {
+    if (reason == "manual follow") {
+        return "手动锁定软件跟拍";
+    }
+    if (reason == "manual panorama") {
+        return "手动锁定全景视角";
+    }
+    if (reason == "face closeup") {
+        return "辅助机位捕捉到近景动作";
+    }
+    if (reason == "closeup motion") {
+        return "辅助机位检测到明显动作";
+    }
+    if (reason == "tracked action") {
+        return "正在围绕主要动作区域跟拍";
+    }
+    if (reason == "stable panorama") {
+        return "保持全景，方便观察整体阵型";
+    }
+    return QString::fromStdString(reason);
 }
 
 std::string formatTimestamp(double timestamp) {
@@ -63,21 +88,25 @@ VideoPane::VideoPane(const QString& title, QWidget* parent)
     imageLabel = new QLabel(this);
     imageLabel->setAlignment(Qt::AlignCenter);
     imageLabel->setMinimumSize(320, 180);
-    imageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    imageLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    imageLabel->setObjectName("videoSurface");
+    imageLabel->installEventFilter(this);
+    imageLabel->setCursor(Qt::CrossCursor);
 
     scrollArea = new QScrollArea(this);
     scrollArea->setWidget(imageLabel);
-    scrollArea->setWidgetResizable(false);
+    scrollArea->setWidgetResizable(true);
     scrollArea->setAlignment(Qt::AlignCenter);
     scrollArea->setFrameShape(QFrame::NoFrame);
 
     zoomSlider = new QSlider(Qt::Horizontal, this);
     zoomSlider->setRange(50, 200);
     zoomSlider->setValue(100);
-    zoomSlider->setToolTip("Zoom");
+    zoomSlider->setToolTip("专业模式：缩放预览画面");
+    zoomSlider->hide();
 
-    resetButton = new QPushButton("Reset", this);
-    resetButton->setToolTip("Reset zoom");
+    resetButton = new QPushButton("画面校准", this);
+    resetButton->setToolTip("一键恢复标准 16:9 预览比例");
 
     auto* controls = new QHBoxLayout();
     controls->addWidget(zoomSlider, 1);
@@ -116,25 +145,74 @@ int VideoPane::zoomPercent() const {
     return currentZoomPercent;
 }
 
+void VideoPane::setFrameClickCallback(std::function<void(const cv::Point2f&)> callback) {
+    frameClickCallback = std::move(callback);
+}
+
+bool VideoPane::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == imageLabel && event->type() == QEvent::MouseButtonPress && frameClickCallback) {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            cv::Point2f framePoint;
+            if (mapWidgetPointToFrame(mouseEvent->position().toPoint(), framePoint)) {
+                frameClickCallback(framePoint);
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void VideoPane::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updatePixmap();
+}
+
+bool VideoPane::mapWidgetPointToFrame(const QPoint& point, cv::Point2f& framePoint) const {
+    if (currentImage.isNull() || currentPixmapSize.isEmpty()) {
+        return false;
+    }
+
+    const QSize labelSize = imageLabel->size();
+    const int offsetX = std::max(0, (labelSize.width() - currentPixmapSize.width()) / 2);
+    const int offsetY = std::max(0, (labelSize.height() - currentPixmapSize.height()) / 2);
+    const int localX = point.x() - offsetX;
+    const int localY = point.y() - offsetY;
+
+    if (localX < 0 || localY < 0 || localX >= currentPixmapSize.width() || localY >= currentPixmapSize.height()) {
+        return false;
+    }
+
+    framePoint.x = static_cast<float>(localX) * static_cast<float>(currentImage.width()) /
+        static_cast<float>(std::max(1, currentPixmapSize.width()));
+    framePoint.y = static_cast<float>(localY) * static_cast<float>(currentImage.height()) /
+        static_cast<float>(std::max(1, currentPixmapSize.height()));
+    return true;
+}
+
 void VideoPane::updatePixmap() {
     if (currentImage.isNull()) {
+        currentPixmapSize = QSize();
         imageLabel->clear();
-        imageLabel->setText("No Signal");
+        imageLabel->setText("暂无画面");
         return;
     }
 
-    const QSize scaledSize(
-        std::max(1, currentImage.width() * currentZoomPercent / 100),
-        std::max(1, currentImage.height() * currentZoomPercent / 100)
+    QSize targetSize = scrollArea->viewport()->size();
+    if (!targetSize.isValid() || targetSize.isEmpty()) {
+        targetSize = QSize(320, 180);
+    }
+    targetSize = QSize(
+        std::max(1, targetSize.width() * currentZoomPercent / 100),
+        std::max(1, targetSize.height() * currentZoomPercent / 100)
     );
     const QPixmap pixmap = QPixmap::fromImage(currentImage).scaled(
-        scaledSize,
+        targetSize,
         Qt::KeepAspectRatio,
         Qt::SmoothTransformation
     );
+    currentPixmapSize = pixmap.size();
     imageLabel->setPixmap(pixmap);
-    imageLabel->resize(pixmap.size());
-    imageLabel->setMinimumSize(pixmap.size());
 }
 
 QtBroadcastWindow::QtBroadcastWindow(int panoramaCameraIndex, int closeupCameraIndex, QWidget* parent)
@@ -152,16 +230,16 @@ QtBroadcastWindow::~QtBroadcastWindow() {
 
 bool QtBroadcastWindow::initialize() {
     if (!streams.init(requestedPanoramaIndex, requestedCloseupIndex)) {
-        QMessageBox::critical(this, "Camera Error", "Failed to open both USB cameras. Check UGREEN Camera 1080P and UVC Camera, or pass camera indexes on the command line.");
+        QMessageBox::critical(this, "机位连接失败", "未能同时打开两路 USB 摄像头。请检查全景机位、辅助机位连接，或在命令行传入摄像头编号。");
         return false;
     }
 
     if (!panoramaDetection.init() || !closeupDetection.init() || !faceCapture.init()) {
-        QMessageBox::critical(this, "Init Error", "Detection modules failed to initialize.");
+        QMessageBox::critical(this, "系统初始化失败", "画面分析模块未能启动，请检查运行目录中的模型与依赖文件。");
         return false;
     }
 
-    statusLabel->setText(QString("Ready | panorama index %1 | close-up index %2")
+    statusLabel->setText(QString("双机位已就绪：全景机位 %1，辅助机位 %2")
         .arg(streams.panoramaIndex())
         .arg(streams.closeupIndex()));
 
@@ -176,7 +254,7 @@ void QtBroadcastWindow::closeEvent(QCloseEvent* event) {
 }
 
 void QtBroadcastWindow::setupUi() {
-    setWindowTitle("Football Auto Broadcast Console");
+    setWindowTitle("校园足球自动转播系统");
     resize(1600, 900);
     setMinimumSize(1280, 720);
 
@@ -185,24 +263,30 @@ void QtBroadcastWindow::setupUi() {
         processFrame();
     });
 
-    broadcastPane = new VideoPane("自动转播输出 | Automatic Broadcast Output", this);
-    panoramaPane = new VideoPane("全景画面 | UGREEN Camera 1080P", this);
-    closeupPane = new VideoPane("球员特写画面 | UVC Camera", this);
+    broadcastPane = new VideoPane("16:9 自动导播输出", this);
+    panoramaPane = new VideoPane("全景机位", this);
+    closeupPane = new VideoPane("辅助机位", this);
+    panoramaPane->setFrameClickCallback([this](const cv::Point2f& point) {
+        seedPanoramaBall(point);
+    });
 
-    autoModeButton = new QRadioButton("AUTO", this);
-    forcePanoramaButton = new QRadioButton("PANORAMA", this);
-    forceCloseupButton = new QRadioButton("CLOSE-UP", this);
+    autoModeButton = new QRadioButton("自动导播", this);
+    forcePanoramaButton = new QRadioButton("锁定全景", this);
+    forceFollowButton = new QRadioButton("软件跟拍", this);
+    autoModeButton->setObjectName("autoModeButton");
+    forcePanoramaButton->setObjectName("panoramaModeButton");
+    forceFollowButton->setObjectName("followModeButton");
     autoModeButton->setChecked(true);
 
     auto* modeGroup = new QButtonGroup(this);
     modeGroup->addButton(autoModeButton);
     modeGroup->addButton(forcePanoramaButton);
-    modeGroup->addButton(forceCloseupButton);
+    modeGroup->addButton(forceFollowButton);
     connect(modeGroup, QOverload<QAbstractButton*>::of(&QButtonGroup::buttonClicked), this, [this](QAbstractButton*) {
         updateOperatorMode();
     });
 
-    recordButton = new QPushButton("● REC", this);
+    recordButton = new QPushButton("● 开始录制", this);
     recordButton->setObjectName("recordButton");
     connect(recordButton, &QPushButton::clicked, this, [this]() {
         if (recording) {
@@ -212,7 +296,7 @@ void QtBroadcastWindow::setupUi() {
         }
     });
 
-    replayButton = new QPushButton("REPLAY", this);
+    replayButton = new QPushButton("实时回看", this);
     replayButton->setObjectName("secondaryButton");
     connect(replayButton, &QPushButton::clicked, this, [this]() {
         if (consoleTabs) {
@@ -220,20 +304,20 @@ void QtBroadcastWindow::setupUi() {
         }
     });
 
-    statusLabel = new QLabel("Initializing dual cameras...", this);
+    statusLabel = new QLabel("正在准备双机位画面...", this);
     statusLabel->setObjectName("statusLabel");
 
-    scoreLabel = new QLabel("HOME 2  -  1 AWAY", this);
+    scoreLabel = new QLabel("主队 2  -  1 客队", this);
     scoreLabel->setObjectName("scoreLabel");
     scoreLabel->setAlignment(Qt::AlignCenter);
 
-    clockLabel = new QLabel("00:00 | 2nd HALF", this);
+    clockLabel = new QLabel("00:00 | 直播中", this);
     clockLabel->setObjectName("clockLabel");
     clockLabel->setAlignment(Qt::AlignCenter);
 
-    auto* brandTitle = new QLabel("足球自动转播与剪辑程序", this);
+    auto* brandTitle = new QLabel("校园足球自动转播系统", this);
     brandTitle->setObjectName("brandTitle");
-    auto* brandSubtitle = new QLabel("Match-aware automatic director / live broadcast / full-match and personal highlights", this);
+    auto* brandSubtitle = new QLabel("双固定机位 · 软件跟拍 · 全场高光与个人集锦", this);
     brandSubtitle->setObjectName("brandSubtitle");
 
     auto* brandLayout = new QVBoxLayout();
@@ -247,15 +331,13 @@ void QtBroadcastWindow::setupUi() {
     topBar->addLayout(brandLayout, 1);
     topBar->addWidget(scoreLabel);
     topBar->addWidget(clockLabel);
-    topBar->addWidget(recordButton);
-    topBar->addWidget(replayButton);
 
     consoleTabs = new QTabWidget(this);
     consoleTabs->setDocumentMode(true);
     consoleTabs->addTab(createLiveDirectorTab(), "实时导播");
     consoleTabs->addTab(createHighlightTab(false), "全场高光");
     consoleTabs->addTab(createHighlightTab(true), "个人高光");
-    consoleTabs->addTab(createMetricsTab(), "评估指标");
+    consoleTabs->addTab(createMetricsTab(), "效果评估");
 
     auto* root = new QVBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
@@ -276,69 +358,57 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
     sideLayout->addWidget(panoramaPane, 1);
     sideLayout->addWidget(closeupPane, 1);
 
-    auto* modeContent = new QWidget(this);
-    auto* modeLayout = new QVBoxLayout(modeContent);
-    modeLayout->setContentsMargins(0, 0, 0, 0);
-    modeLayout->setSpacing(10);
-
-    auto* modeButtons = new QHBoxLayout();
-    modeButtons->setSpacing(8);
-    modeButtons->addWidget(autoModeButton);
-    modeButtons->addWidget(forcePanoramaButton);
-    modeButtons->addWidget(forceCloseupButton);
-    modeLayout->addLayout(modeButtons);
-
-    decisionLabel = new QLabel("AUTO | stable panorama | waiting for threat trigger", this);
-    decisionLabel->setObjectName("decisionLabel");
-    decisionLabel->setWordWrap(true);
-    modeLayout->addWidget(decisionLabel);
-
     auto* timelineContent = new QWidget(this);
     auto* timelineLayout = new QVBoxLayout(timelineContent);
     timelineLayout->setContentsMargins(0, 0, 0, 0);
     timelineLayout->setSpacing(8);
     const QStringList eventTexts = {
-        "02.6s save",
-        "08.7s shoot",
-        "14.8s goal",
-        "25.0s attack",
-        "37.3s replay"
+        "02.6秒  成功扑救",
+        "08.7秒  球员射门",
+        "14.8秒  进球得分",
+        "25.0秒  精彩进攻",
+        "37.3秒  适合回看"
     };
     for (const QString& text : eventTexts) {
         auto* item = new QLabel(text, this);
         item->setObjectName("timelineItem");
         timelineLayout->addWidget(item);
     }
+    timelineLayout->addStretch(1);
+    sideLayout->addWidget(createInfoPanel("比赛时间线", "实时关键事件", timelineContent), 1);
 
-    auto* metricContent = new QWidget(this);
-    auto* metricLayout = new QGridLayout(metricContent);
-    metricLayout->setContentsMargins(0, 0, 0, 0);
-    metricLayout->setHorizontalSpacing(8);
-    metricLayout->setVerticalSpacing(8);
-    targetMetricLabel = createMetricLabel("目标入镜率", "100%");
-    replayMetricLabel = createMetricLabel("回放评分", "0.89");
-    eventMetricLabel = createMetricLabel("事件密度", "27.4/min");
-    latencyMetricLabel = createMetricLabel("处理延迟", "86ms");
-    metricLayout->addWidget(targetMetricLabel, 0, 0);
-    metricLayout->addWidget(replayMetricLabel, 0, 1);
-    metricLayout->addWidget(eventMetricLabel, 1, 0);
-    metricLayout->addWidget(latencyMetricLabel, 1, 1);
+    auto* modeContent = new QWidget(this);
+    auto* modeLayout = new QVBoxLayout(modeContent);
+    modeLayout->setContentsMargins(0, 0, 0, 0);
+    modeLayout->setSpacing(12);
+
+    auto* modeButtons = new QHBoxLayout();
+    modeButtons->setSpacing(10);
+    modeButtons->addWidget(autoModeButton);
+    modeButtons->addWidget(forcePanoramaButton);
+    modeButtons->addWidget(forceFollowButton);
+    modeButtons->addWidget(replayButton);
+    modeButtons->addWidget(recordButton);
+    modeLayout->addLayout(modeButtons);
+
+    decisionLabel = new QLabel("当前镜头状态：自动导播中 · 等待比赛画面输入", this);
+    decisionLabel->setObjectName("decisionLabel");
+    decisionLabel->setWordWrap(true);
+    modeLayout->addWidget(decisionLabel);
 
     auto* bottomLayout = new QHBoxLayout();
-    bottomLayout->setSpacing(12);
-    bottomLayout->addWidget(createInfoPanel("Director Mode", "AUTO / PANORAMA / CLOSE-UP", modeContent), 2);
-    bottomLayout->addWidget(createInfoPanel("Event Timeline", "live highlight queue", timelineContent), 1);
-    bottomLayout->addWidget(createInfoPanel("Live Metrics", "mapped from C++ runtime", metricContent), 2);
+    bottomLayout->setSpacing(0);
+    bottomLayout->addWidget(createInfoPanel("一键操作", "直播台常用控制", modeContent), 1);
 
     auto* grid = new QGridLayout(tab);
-    grid->setContentsMargins(14, 14, 14, 14);
-    grid->setHorizontalSpacing(14);
+    grid->setContentsMargins(16, 16, 16, 12);
+    grid->setHorizontalSpacing(16);
     grid->setVerticalSpacing(14);
     grid->addWidget(broadcastPane, 0, 0, 2, 1);
     grid->addLayout(sideLayout, 0, 1, 2, 1);
     grid->addLayout(bottomLayout, 2, 0, 1, 2);
     grid->addWidget(statusLabel, 3, 0, 1, 2);
-    grid->setColumnStretch(0, 3);
+    grid->setColumnStretch(0, 4);
     grid->setColumnStretch(1, 1);
     grid->setRowStretch(0, 1);
     grid->setRowStretch(1, 1);
@@ -348,65 +418,75 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
 
 QWidget* QtBroadcastWindow::createHighlightTab(bool personal) {
     auto* tab = new QWidget(this);
-    auto* layout = new QHBoxLayout(tab);
-    layout->setContentsMargins(14, 14, 14, 14);
-    layout->setSpacing(14);
+    auto* layout = new QGridLayout(tab);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setHorizontalSpacing(16);
+    layout->setVerticalSpacing(14);
 
+    auto* preview = createPreviewPlaceholder(
+        personal ? "16:9 个人集锦预览" : "16:9 全场高光预览",
+        personal ? "选择球员后，系统自动拼接该球员的关键表现" : "系统按比赛时间自动拼接进球、射门、扑救和精彩攻防"
+    );
     auto* list = createHighlightList(personal);
-    layout->addWidget(createInfoPanel(personal ? "个人高光剪辑" : "全场高光剪辑",
-                                     personal ? "selected player clips and coach review" : "highlight_report.json preview",
-                                     list), 2);
+    layout->addWidget(preview, 0, 0, 2, 1);
+    layout->addWidget(createInfoPanel(personal ? "个人片段清单" : "集锦片段清单",
+                                     personal ? "按号码/球员筛选后的高光事件" : "按比赛时间排序，便于人工微调",
+                                     list), 2, 0, 1, 1);
 
     auto* scoreContent = new QWidget(this);
     auto* scoreLayout = new QGridLayout(scoreContent);
     scoreLayout->setContentsMargins(0, 0, 0, 0);
     scoreLayout->setSpacing(10);
-    scoreLayout->addWidget(createMetricLabel("Replay Score", personal ? "0.91" : "0.8875"), 0, 0);
-    scoreLayout->addWidget(createMetricLabel("Average Duration", "5.0s"), 0, 1);
-    scoreLayout->addWidget(createMetricLabel("Target Visibility", "100%"), 1, 0);
-    scoreLayout->addWidget(createMetricLabel(personal ? "Player Clips" : "Highlight Count", personal ? "8" : "20"), 1, 1);
-    layout->addWidget(createInfoPanel(personal ? "教练复盘评分" : "解释性高光评分",
-                                     "event type / threat zone / continuity / replay value",
-                                     scoreContent), 1);
+    scoreLayout->addWidget(createMetricLabel("推荐程度", personal ? "4.6/5" : "4.5/5"), 0, 0);
+    scoreLayout->addWidget(createMetricLabel("平均时长", "5.0秒"), 0, 1);
+    scoreLayout->addWidget(createMetricLabel("画面完整度", "优秀"), 1, 0);
+    scoreLayout->addWidget(createMetricLabel(personal ? "个人片段" : "高光数量", personal ? "8段" : "20段"), 1, 1);
+    layout->addWidget(createInfoPanel(personal ? "球员表现概览" : "高光生成结果",
+                                     personal ? "进球、助攻、抢断、关键防守" : "结合事件类型、威胁区域、连续性和回看价值",
+                                     scoreContent), 0, 1, 1, 1);
 
     auto* outputList = new QListWidget(this);
     outputList->setObjectName("outputList");
     if (personal) {
-        outputList->addItems({"personal_highlight.mp4", "personal_highlight_report.json", "coach_review_notes"});
+        outputList->addItems({"个人专属集锦 personal_highlight.mp4", "个人事件报告 personal_highlight_report.json", "教练复盘备注 coach_review_notes"});
     } else {
-        outputList->addItems({"broadcast_record.mp4", "highlight.mp4", "highlight_report.json"});
+        outputList->addItems({"完整转播记录 broadcast_record.mp4", "全场高光集锦 highlight.mp4", "高光事件报告 highlight_report.json"});
     }
-    layout->addWidget(createInfoPanel("剪辑输出包", "files generated by the program", outputList), 1);
+    layout->addWidget(createInfoPanel("一键导出内容", "默认生成 1080P/720P 可分享视频", outputList), 1, 1, 2, 1);
+    layout->setColumnStretch(0, 3);
+    layout->setColumnStretch(1, 1);
     return tab;
 }
 
 QWidget* QtBroadcastWindow::createMetricsTab() {
     auto* tab = new QWidget(this);
     auto* layout = new QHBoxLayout(tab);
-    layout->setContentsMargins(14, 14, 14, 14);
-    layout->setSpacing(14);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(16);
 
     auto* qualityContent = new QWidget(this);
     auto* qualityLayout = new QGridLayout(qualityContent);
     qualityLayout->setContentsMargins(0, 0, 0, 0);
     qualityLayout->setSpacing(10);
-    qualityLayout->addWidget(createMetricLabel("Ball-in-frame", "96%"), 0, 0);
-    qualityLayout->addWidget(createMetricLabel("Key-player-in-frame", "91%"), 0, 1);
-    qualityLayout->addWidget(createMetricLabel("Switch Smoothness", "87"), 1, 0);
-    qualityLayout->addWidget(createMetricLabel("Viewer Score", "4.5/5"), 1, 1);
-    layout->addWidget(createInfoPanel("自动转播与高光评估", "viewer quality and coaching value", qualityContent), 1);
+    qualityLayout->addWidget(createMetricLabel("画面捕捉质量", "优秀"), 0, 0);
+    qualityLayout->addWidget(createMetricLabel("镜头切换流畅度", "良好"), 0, 1);
+    qualityLayout->addWidget(createMetricLabel("关键事件捕捉", "良好"), 1, 0);
+    qualityLayout->addWidget(createMetricLabel("整体体验评分", "4.5/5"), 1, 1);
+    layout->addWidget(createInfoPanel("通俗评价结果", "普通用户默认只看结论", qualityContent), 1);
 
     auto* matrix = new QListWidget(this);
     matrix->setObjectName("metricMatrix");
     matrix->addItems({
-        "关键事件漏检率: 12%",
-        "切换抖动次数: 低",
-        "战术信息保留: 84%",
-        "高光冗余控制: 78%",
-        "处理延迟: 86ms",
-        "主画面目标可见性: 100%"
+        "足球入镜率：96%",
+        "关键球员入镜率：91%",
+        "关键事件漏检率：12%",
+        "镜头抖动次数：低",
+        "战术信息保留率：84%",
+        "高光冗余控制：78%",
+        "实时观看延迟：33ms",
+        "后台分析延迟：86ms"
     });
-    layout->addWidget(createInfoPanel("指标矩阵", "beyond detection accuracy", matrix), 1);
+    layout->addWidget(createInfoPanel("专业数据", "需要复盘或写报告时查看", matrix), 1);
     return tab;
 }
 
@@ -430,6 +510,17 @@ QWidget* QtBroadcastWindow::createInfoPanel(const QString& title, const QString&
     return panel;
 }
 
+QLabel* QtBroadcastWindow::createPreviewPlaceholder(const QString& title, const QString& subtitle) {
+    auto* label = new QLabel(QString("<strong>%1</strong><br><span>%2</span>").arg(title, subtitle), this);
+    label->setObjectName("previewPlaceholder");
+    label->setTextFormat(Qt::RichText);
+    label->setAlignment(Qt::AlignCenter);
+    label->setWordWrap(true);
+    label->setMinimumSize(640, 360);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    return label;
+}
+
 QLabel* QtBroadcastWindow::createMetricLabel(const QString& name, const QString& value) {
     auto* label = new QLabel(QString("<span>%1</span><br><strong>%2</strong>").arg(name, value), this);
     label->setObjectName("metricCard");
@@ -443,18 +534,18 @@ QListWidget* QtBroadcastWindow::createHighlightList(bool personal) {
     auto* list = new QListWidget(this);
     list->setObjectName("highlightList");
     const QStringList allItems = {
-        "02.6s - 07.6s | 扑救 | target x:320 y:239 w:32 h:158 | score 0.82",
-        "04.6s - 09.6s | 射门 | target x:371 y:100 w:709 h:620 | score 0.89",
-        "08.7s - 13.7s | 扑救 | target x:655 y:84 w:621 h:636 | score 0.86",
-        "14.8s - 19.8s | 进球 | target x:742 y:329 w:489 h:391 | score 0.96",
-        "25.1s - 30.1s | 射门 | target x:592 y:236 w:599 h:381 | score 0.88",
-        "37.3s - 42.3s | 扑救 | target x:0 y:0 w:1280 h:720 | score 0.91"
+        "02.6秒 - 07.6秒 | 成功扑救 | 辅助机位回看",
+        "04.6秒 - 09.6秒 | 球员射门 | 软件跟拍保留进攻过程",
+        "08.7秒 - 13.7秒 | 门前扑救 | 推荐加入全场集锦",
+        "14.8秒 - 19.8秒 | 进球得分 | 必选高光片段",
+        "25.1秒 - 30.1秒 | 精彩射门 | 保留禁区威胁",
+        "37.3秒 - 42.3秒 | 防守反抢 | 适合教练复盘"
     };
     const QStringList personalItems = {
-        "04.6s - 09.6s | 11号前锋射门参与 | score 0.89",
-        "14.8s - 19.8s | 11号前锋禁区跑位 | score 0.96",
-        "25.1s - 30.1s | 11号前锋二次进攻 | score 0.88",
-        "37.3s - 42.3s | 11号前锋反抢压迫 | score 0.91"
+        "04.6秒 - 09.6秒 | 11号前锋射门参与",
+        "14.8秒 - 19.8秒 | 11号前锋禁区跑位",
+        "25.1秒 - 30.1秒 | 11号前锋二次进攻",
+        "37.3秒 - 42.3秒 | 11号前锋反抢压迫"
     };
     list->addItems(personal ? personalItems : allItems);
     return list;
@@ -462,38 +553,43 @@ QListWidget* QtBroadcastWindow::createHighlightList(bool personal) {
 
 void QtBroadcastWindow::setupStyle() {
     setStyleSheet(
-        "QMainWindow, QWidget { background: #07100d; color: #edf4ef; font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI'; }"
-        "QWidget#qt_scrollarea_viewport { background: #06100d; }"
-        "QScrollArea { background: #06100d; border: 1px solid rgba(238, 247, 239, 36); border-radius: 0; }"
-        "QFrame#infoPanel, VideoPane { background: rgba(8, 17, 14, 210); border: 1px solid rgba(238, 247, 239, 34); }"
-        "QLabel#brandTitle { color: #f5fff0; font-size: 24px; font-weight: 900; }"
-        "QLabel#brandSubtitle { color: #8fa598; font-size: 12px; font-weight: 700; }"
-        "QLabel#scoreLabel { color: #07100d; background: #d6f25f; padding: 9px 18px; font-size: 19px; font-weight: 900; }"
-        "QLabel#clockLabel { color: #edf4ef; background: rgba(238, 247, 239, 20); border: 1px solid rgba(238, 247, 239, 42); padding: 9px 16px; font-weight: 900; }"
-        "QLabel#paneTitle { color: #f4f7f3; font-size: 15px; font-weight: 900; }"
-        "QLabel#statusLabel { color: #aab9b2; padding: 8px 14px; border-top: 1px solid rgba(238, 247, 239, 22); }"
-        "QLabel#decisionLabel { color: #d6f25f; font-size: 13px; font-weight: 800; }"
-        "QLabel#panelTitle { color: #f5fff0; font-size: 16px; font-weight: 900; }"
-        "QLabel#panelSubtitle { color: #8fa598; font-size: 11px; font-weight: 700; }"
-        "QLabel#timelineItem { color: #edf4ef; background: rgba(238, 247, 239, 18); border-left: 3px solid #45d9ff; padding: 5px 8px; font-weight: 800; }"
-        "QLabel#metricCard { color: #d6f25f; background: rgba(238, 247, 239, 15); border: 1px solid rgba(238, 247, 239, 28); padding: 9px; font-weight: 900; }"
-        "QLabel#metricCard span { color: #8fa598; font-size: 11px; }"
-        "QLabel#metricCard strong { color: #d6f25f; font-size: 22px; }"
-        "QPushButton { background: #d6f25f; color: #07100d; border: 0; border-radius: 0; padding: 9px 14px; font-weight: 900; }"
-        "QPushButton:hover { background: #edff8f; }"
-        "QPushButton#recordButton { background: #ff4c4c; color: #ffffff; }"
-        "QPushButton#secondaryButton { background: rgba(238, 247, 239, 24); color: #edf4ef; border: 1px solid rgba(238, 247, 239, 40); }"
-        "QRadioButton { spacing: 8px; padding: 8px 10px; color: #e8efe9; font-weight: 900; background: rgba(238, 247, 239, 16); border: 1px solid rgba(238, 247, 239, 30); }"
+        "QMainWindow, QWidget { background: #07110f; color: #f3fff5; font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI'; }"
+        "QWidget#qt_scrollarea_viewport { background: #050c0a; }"
+        "QScrollArea { background: #050c0a; border: 1px solid rgba(223, 247, 232, 44); border-radius: 8px; }"
+        "QFrame#infoPanel, VideoPane { background: rgba(9, 24, 21, 232); border: 1px solid rgba(223, 247, 232, 38); border-radius: 8px; }"
+        "QLabel#videoSurface { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e9652, stop:0.52 #19663a, stop:1 #8fbd58); color: rgba(243, 255, 245, 205); font-size: 17px; font-weight: 900; }"
+        "QLabel#brandTitle { color: #f3fff5; font-size: 24px; font-weight: 900; }"
+        "QLabel#brandSubtitle { color: #9db5a8; font-size: 13px; font-weight: 800; }"
+        "QLabel#scoreLabel { color: #06100d; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #9af15d); padding: 10px 22px; font-size: 20px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#clockLabel { color: #dff7ff; background: rgba(88, 200, 255, 32); border: 1px solid rgba(88, 200, 255, 88); padding: 10px 16px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#paneTitle { color: #f3fff5; font-size: 15px; font-weight: 900; padding-bottom: 2px; }"
+        "QLabel#statusLabel { color: #9db5a8; padding: 8px 14px; border-top: 1px solid rgba(223, 247, 232, 24); }"
+        "QLabel#decisionLabel { color: #e7ff63; background: rgba(231, 255, 99, 18); border: 1px solid rgba(231, 255, 99, 48); border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 900; }"
+        "QLabel#panelTitle { color: #f3fff5; font-size: 16px; font-weight: 900; }"
+        "QLabel#panelSubtitle { color: #9db5a8; font-size: 11px; font-weight: 800; }"
+        "QLabel#timelineItem { color: #f3fff5; background: rgba(255, 255, 255, 18); border-left: 4px solid #58c8ff; padding: 9px 10px; font-weight: 900; border-radius: 6px; }"
+        "QLabel#previewPlaceholder { color: #f3fff5; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e9652, stop:0.48 #19663a, stop:1 #8fbd58); border: 1px solid rgba(245, 255, 240, 64); border-radius: 8px; font-size: 28px; font-weight: 900; }"
+        "QLabel#previewPlaceholder span { color: rgba(243, 255, 245, 205); font-size: 15px; font-weight: 800; }"
+        "QLabel#metricCard { color: #e7ff63; background: rgba(255, 255, 255, 17); border: 1px solid rgba(223, 247, 232, 34); padding: 11px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#metricCard span { color: #9db5a8; font-size: 11px; font-weight: 800; }"
+        "QLabel#metricCard strong { color: #e7ff63; font-size: 23px; }"
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #a7ee62); color: #06100d; border: 0; border-radius: 8px; padding: 13px 18px; font-size: 14px; font-weight: 900; }"
+        "QPushButton:hover { background: #f0ff8f; }"
+        "QPushButton#recordButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff4d55, stop:1 #f07144); color: #ffffff; }"
+        "QPushButton#secondaryButton { background: rgba(255, 255, 255, 24); color: #f3fff5; border: 1px solid rgba(223, 247, 232, 42); }"
+        "QRadioButton { spacing: 8px; padding: 13px 18px; color: #f3fff5; font-size: 14px; font-weight: 900; background: rgba(255, 255, 255, 18); border: 1px solid rgba(223, 247, 232, 34); border-radius: 8px; }"
         "QRadioButton::indicator { width: 0px; height: 0px; }"
-        "QRadioButton:checked { color: #07100d; background: #45d9ff; border-color: #45d9ff; }"
+        "QRadioButton:checked { color: #06100d; background: #e7ff63; border-color: #e7ff63; }"
+        "QRadioButton#followModeButton:checked { background: #58c8ff; border-color: #58c8ff; }"
+        "QRadioButton#panoramaModeButton:checked { background: #47e3a0; border-color: #47e3a0; }"
         "QTabWidget::pane { border: 0; background: transparent; }"
-        "QTabBar::tab { background: rgba(238, 247, 239, 16); color: #8fa598; padding: 10px 18px; margin-right: 7px; font-weight: 900; border: 1px solid rgba(238, 247, 239, 28); }"
-        "QTabBar::tab:selected { background: #d6f25f; color: #07100d; border-color: #d6f25f; }"
-        "QListWidget { background: rgba(238, 247, 239, 12); border: 1px solid rgba(238, 247, 239, 28); color: #edf4ef; outline: 0; }"
-        "QListWidget::item { padding: 10px; border-bottom: 1px solid rgba(238, 247, 239, 22); }"
-        "QListWidget::item:selected { background: rgba(69, 217, 255, 58); color: #ffffff; }"
-        "QSlider::groove:horizontal { height: 5px; background: #32423b; border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 16px; margin: -6px 0; border-radius: 8px; background: #d6f25f; }"
+        "QTabBar::tab { background: rgba(255, 255, 255, 16); color: #9db5a8; padding: 10px 18px; margin-right: 7px; font-weight: 900; border: 1px solid rgba(223, 247, 232, 30); border-top-left-radius: 7px; border-top-right-radius: 7px; }"
+        "QTabBar::tab:selected { background: #e7ff63; color: #06100d; border-color: #e7ff63; }"
+        "QListWidget { background: rgba(255, 255, 255, 13); border: 1px solid rgba(223, 247, 232, 32); color: #f3fff5; outline: 0; border-radius: 7px; }"
+        "QListWidget::item { padding: 10px; border-bottom: 1px solid rgba(223, 247, 232, 24); }"
+        "QListWidget::item:selected { background: rgba(88, 200, 255, 70); color: #ffffff; }"
+        "QSlider::groove:horizontal { height: 5px; background: #31453b; border-radius: 2px; }"
+        "QSlider::handle:horizontal { width: 16px; margin: -6px 0; border-radius: 8px; background: #e7ff63; }"
     );
 }
 
@@ -503,9 +599,11 @@ void QtBroadcastWindow::processFrame() {
         statusLabel->setText("Camera frame read failed. Check device connection.");
         return;
     }
+    lastFrameTimestamp = frame.timestamp;
+    lastPanoramaFrameSize = frame.panorama.size();
 
-    const std::vector<TargetInfo> panoramaTargets = panoramaDetection.detect(frame.panorama);
-    const std::vector<TargetInfo> closeupTargets = closeupDetection.detect(frame.closeup);
+    const std::vector<TargetInfo> panoramaTargets = panoramaDetection.detect(frame.panorama, frame.timestamp);
+    const std::vector<TargetInfo> closeupTargets = closeupDetection.detect(frame.closeup, frame.timestamp);
     const std::vector<FaceInfo> faces = faceCapture.capture(frame.closeup, frame.timestamp);
     const BroadcastDecision decision = decideBroadcast(panoramaTargets, closeupTargets, faces, frame.timestamp);
     lastDecision = decision;
@@ -513,7 +611,9 @@ void QtBroadcastWindow::processFrame() {
 
     const cv::Mat broadcastFrame = renderBroadcastFrame(frame, decision, panoramaTargets, closeupTargets, faces);
 
-    panoramaPane->setFrame(normalizeFrame(frame.panorama));
+    cv::Mat panoramaMonitor = normalizeFrame(frame.panorama);
+    drawPanoramaSeed(panoramaMonitor);
+    panoramaPane->setFrame(panoramaMonitor);
     closeupPane->setFrame(normalizeFrame(frame.closeup));
     broadcastPane->setFrame(broadcastFrame);
 
@@ -526,12 +626,12 @@ void QtBroadcastWindow::startRecording() {
         !openWriter(closeupWriter, "closeup_record.mp4") ||
         !openWriter(broadcastWriter, "broadcast_record.mp4")) {
         releaseWriters();
-        QMessageBox::critical(this, "Recording Error", "Failed to create recording files. Check write permission in the current directory.");
+        QMessageBox::critical(this, "录制失败", "未能创建录制文件，请检查当前目录写入权限。");
         return;
     }
 
     recording = true;
-    recordButton->setText("■ STOP");
+    recordButton->setText("■ 结束录制");
 }
 
 void QtBroadcastWindow::stopRecording() {
@@ -542,13 +642,13 @@ void QtBroadcastWindow::stopRecording() {
     recording = false;
     releaseWriters();
     if (recordButton) {
-        recordButton->setText("● REC");
+        recordButton->setText("● 开始录制");
     }
 }
 
 void QtBroadcastWindow::updateOperatorMode() {
-    if (forceCloseupButton->isChecked()) {
-        operatorMode = OperatorMode::FORCE_CLOSEUP;
+    if (forceFollowButton->isChecked()) {
+        operatorMode = OperatorMode::FORCE_FOLLOW;
     } else if (forcePanoramaButton->isChecked()) {
         operatorMode = OperatorMode::FORCE_PANORAMA;
     } else {
@@ -557,16 +657,16 @@ void QtBroadcastWindow::updateOperatorMode() {
 }
 
 BroadcastDecision QtBroadcastWindow::decideBroadcast(
-    const std::vector<TargetInfo>&,
+    const std::vector<TargetInfo>& panoramaTargets,
     const std::vector<TargetInfo>& closeupTargets,
     const std::vector<FaceInfo>& faces,
     double timestamp
 ) {
     BroadcastDecision decision;
 
-    if (operatorMode == OperatorMode::FORCE_CLOSEUP) {
-        decision.mode = BroadcastMode::CLOSEUP;
-        decision.reason = "manual closeup";
+    if (operatorMode == OperatorMode::FORCE_FOLLOW) {
+        decision.mode = BroadcastMode::FOLLOW;
+        decision.reason = "manual follow";
         decision.hold_until = timestamp;
         return decision;
     }
@@ -585,6 +685,12 @@ BroadcastDecision QtBroadcastWindow::decideBroadcast(
     const bool hasLargeCloseupMotion = std::any_of(closeupTargets.begin(), closeupTargets.end(), [](const TargetInfo& target) {
         return target.box.area() > 4500;
     });
+    const bool hasConfirmedBall = std::any_of(panoramaTargets.begin(), panoramaTargets.end(), [](const TargetInfo& target) {
+        return target.type == TargetType::BALL && target.confidence >= 0.42;
+    });
+    const bool hasActionCluster = std::any_of(panoramaTargets.begin(), panoramaTargets.end(), [](const TargetInfo& target) {
+        return target.type != TargetType::BALL && target.confidence >= 0.22 && target.box.area() > 3500;
+    });
     const bool cooldownReady = timestamp - lastCloseupTriggerTime > 3.0;
 
     if ((hasFace || hasLargeCloseupMotion) && cooldownReady) {
@@ -592,6 +698,13 @@ BroadcastDecision QtBroadcastWindow::decideBroadcast(
         decision.mode = BroadcastMode::CLOSEUP;
         decision.reason = hasFace ? "face closeup" : "closeup motion";
         decision.hold_until = timestamp + 2.5;
+        return decision;
+    }
+
+    if (hasConfirmedBall || hasActionCluster) {
+        decision.mode = BroadcastMode::FOLLOW;
+        decision.reason = hasConfirmedBall ? "tracked ball trajectory" : "tracked action cluster";
+        decision.hold_until = timestamp;
         return decision;
     }
 
@@ -608,17 +721,64 @@ cv::Mat QtBroadcastWindow::renderBroadcastFrame(
     const std::vector<TargetInfo>& closeupTargets,
     const std::vector<FaceInfo>& faces
 ) {
-    cv::Mat output = decision.mode == BroadcastMode::CLOSEUP ? frame.closeup.clone() : frame.panorama.clone();
+    cv::Mat output;
+    if (decision.mode == BroadcastMode::CLOSEUP) {
+        output = frame.closeup.clone();
+    } else if (decision.mode == BroadcastMode::FOLLOW) {
+        output = renderVirtualFollowFrame(frame.panorama, panoramaTargets);
+    } else {
+        output = frame.panorama.clone();
+    }
 
     if (decision.mode == BroadcastMode::CLOSEUP) {
         drawTargets(output, closeupTargets);
         drawFaces(output, faces);
-    } else {
+    } else if (decision.mode == BroadcastMode::NORMAL) {
         drawTargets(output, panoramaTargets);
     }
 
     output = normalizeFrame(output);
     drawStatus(output, decision, faces.size());
+    return output;
+}
+
+cv::Mat QtBroadcastWindow::renderVirtualFollowFrame(const cv::Mat& panorama, const std::vector<TargetInfo>& targets) const {
+    if (panorama.empty() || targets.empty()) {
+        return normalizeFrame(panorama);
+    }
+
+    const TargetInfo* mainTarget = &targets.front();
+    for (const auto& target : targets) {
+        if (target.type == TargetType::BALL) {
+            mainTarget = &target;
+            break;
+        }
+        if (target.box.area() > mainTarget->box.area()) {
+            mainTarget = &target;
+        }
+    }
+
+    const cv::Rect frameRect(0, 0, panorama.cols, panorama.rows);
+    const cv::Rect targetBox = mainTarget->box & frameRect;
+    if (targetBox.empty()) {
+        return normalizeFrame(panorama);
+    }
+
+    const cv::Point center(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2);
+    const double zoomFactor = 1.45;
+    int cropWidth = std::max(1, static_cast<int>(panorama.cols / zoomFactor));
+    int cropHeight = std::max(1, cropWidth * VIDEO_HEIGHT / VIDEO_WIDTH);
+    if (cropHeight > panorama.rows) {
+        cropHeight = panorama.rows;
+        cropWidth = std::max(1, cropHeight * VIDEO_WIDTH / VIDEO_HEIGHT);
+    }
+
+    const int maxX = std::max(0, panorama.cols - cropWidth);
+    const int maxY = std::max(0, panorama.rows - cropHeight);
+    const int x = std::clamp(center.x - cropWidth / 2, 0, maxX);
+    const int y = std::clamp(center.y - cropHeight / 2, 0, maxY);
+    cv::Mat output;
+    cv::resize(panorama(cv::Rect(x, y, cropWidth, cropHeight)), output, cv::Size(VIDEO_WIDTH, VIDEO_HEIGHT));
     return output;
 }
 
@@ -670,36 +830,11 @@ void QtBroadcastWindow::drawFaces(cv::Mat& frame, const std::vector<FaceInfo>& f
 }
 
 void QtBroadcastWindow::drawStatus(cv::Mat& frame, const BroadcastDecision& decision, std::size_t faceCount) const {
-    const std::string mode = CommonTool::broadcastMode2Str(decision.mode);
-    const std::string status = "AUTO BROADCAST | mode: " + mode +
-        " | reason: " + decision.reason +
-        " | faces: " + std::to_string(faceCount) +
-        (recording ? " | REC" : "");
-
-    cv::Mat overlay = frame.clone();
-    cv::rectangle(overlay, cv::Rect(24, 24, std::min(1120, frame.cols - 48), 58), cv::Scalar(0, 0, 0), cv::FILLED);
-    cv::addWeighted(overlay, 0.5, frame, 0.5, 0, frame);
-    cv::putText(
-        frame,
-        status,
-        cv::Point(44, 62),
-        cv::FONT_HERSHEY_SIMPLEX,
-        0.85,
-        cv::Scalar(245, 255, 245),
-        2
-    );
+    (void)decision;
+    (void)faceCount;
 
     if (recording) {
         cv::circle(frame, cv::Point(frame.cols - 58, 52), 13, cv::Scalar(20, 20, 230), cv::FILLED);
-        cv::putText(
-            frame,
-            "REC",
-            cv::Point(frame.cols - 126, 62),
-            cv::FONT_HERSHEY_SIMPLEX,
-            0.85,
-            cv::Scalar(245, 245, 255),
-            2
-        );
     }
 }
 
@@ -718,15 +853,14 @@ void QtBroadcastWindow::updateStatusText(const BroadcastDecision& decision, cons
     const int minutes = totalSeconds / 60;
     const int seconds = totalSeconds % 60;
     if (clockLabel) {
-        clockLabel->setText(QString("%1:%2 | LIVE")
+        clockLabel->setText(QString("%1:%2 | 直播中")
             .arg(minutes, 2, 10, QLatin1Char('0'))
             .arg(seconds, 2, 10, QLatin1Char('0')));
     }
     if (decisionLabel) {
-        decisionLabel->setText(QString("%1 | reason: %2 | hold until %3")
+        decisionLabel->setText(QString("当前镜头状态：%1 · %2")
             .arg(modeLabel(decision.mode))
-            .arg(QString::fromStdString(decision.reason))
-            .arg(QString::fromStdString(formatTimestamp(decision.hold_until))));
+            .arg(decisionReasonText(decision.reason)));
     }
     if (targetMetricLabel) {
         targetMetricLabel->setText("<span>目标入镜率</span><br><strong>100%</strong>");
@@ -742,14 +876,50 @@ void QtBroadcastWindow::updateStatusText(const BroadcastDecision& decision, cons
             .arg(std::max(1, 1000 / FPS)));
     }
 
-    statusLabel->setText(QString("%1 | %2 | panorama %3x%4 | close-up %5x%6 | %7")
-        .arg(recording ? "Recording" : "Standby")
+    statusLabel->setText(QString("%1 · 当前输出：%2 · 比赛时间：%3")
+        .arg(recording ? "正在录制" : "待命中")
         .arg(modeLabel(decision.mode))
-        .arg(frame.panorama.cols)
-        .arg(frame.panorama.rows)
-        .arg(frame.closeup.cols)
-        .arg(frame.closeup.rows)
         .arg(QString::fromStdString(formatTimestamp(frame.timestamp))));
+}
+
+void QtBroadcastWindow::seedPanoramaBall(const cv::Point2f& normalizedPoint) {
+    if (lastPanoramaFrameSize.width <= 0 || lastPanoramaFrameSize.height <= 0) {
+        return;
+    }
+
+    const double scaleX = static_cast<double>(lastPanoramaFrameSize.width) / VIDEO_WIDTH;
+    const double scaleY = static_cast<double>(lastPanoramaFrameSize.height) / VIDEO_HEIGHT;
+    const cv::Point2f sourcePoint(
+        static_cast<float>(normalizedPoint.x * scaleX),
+        static_cast<float>(normalizedPoint.y * scaleY)
+    );
+    const double sourceRadius = panoramaSeedDisplayRadius * std::max(scaleX, scaleY);
+
+    panoramaDetection.seedBallTrack(sourcePoint, lastFrameTimestamp, sourceRadius);
+    panoramaSeedActive = true;
+    panoramaSeedDisplayCenter = normalizedPoint;
+
+    if (statusLabel) {
+        statusLabel->setText(QString("Ball seed set at x=%1 y=%2. Click panorama again to correct drift.")
+            .arg(static_cast<int>(std::round(normalizedPoint.x)))
+            .arg(static_cast<int>(std::round(normalizedPoint.y))));
+    }
+}
+
+void QtBroadcastWindow::drawPanoramaSeed(cv::Mat& frame) const {
+    if (!panoramaSeedActive || frame.empty()) {
+        return;
+    }
+
+    const double scaleX = static_cast<double>(frame.cols) / VIDEO_WIDTH;
+    const double scaleY = static_cast<double>(frame.rows) / VIDEO_HEIGHT;
+    const cv::Point center(
+        static_cast<int>(std::round(panoramaSeedDisplayCenter.x * scaleX)),
+        static_cast<int>(std::round(panoramaSeedDisplayCenter.y * scaleY))
+    );
+    const int radius = std::max(8, static_cast<int>(std::round(panoramaSeedDisplayRadius * std::max(scaleX, scaleY))));
+    cv::circle(frame, center, radius, cv::Scalar(255, 120, 0), 2);
+    cv::circle(frame, center, 5, cv::Scalar(0, 230, 255), cv::FILLED);
 }
 
 bool QtBroadcastWindow::openWriter(cv::VideoWriter& writer, const std::string& path) const {

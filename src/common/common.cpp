@@ -1,5 +1,7 @@
 #include "common.h"
 
+#include <filesystem>
+#include <iostream>
 #include <opencv2/imgproc.hpp>
 
 namespace CommonTool {
@@ -17,6 +19,33 @@ namespace CommonTool {
         cv::GaussianBlur(img, blur, cv::Size(3, 3), 0);
         cv::addWeighted(img, 1.5, blur, -0.5, 0, sharpen);
         return sharpen;
+    }
+
+    std::string finalVideoOutputDir() {
+#ifdef FINAL_OUTPUT_VIDEO_DIR
+        std::filesystem::path outputDir(FINAL_OUTPUT_VIDEO_DIR);
+#else
+        const std::filesystem::path currentDir = std::filesystem::current_path();
+        std::filesystem::path outputDir = currentDir.filename() == "bin" &&
+                currentDir.parent_path().filename() == "build"
+            ? currentDir / "output video"
+            : currentDir / "build" / "bin" / "output video";
+#endif
+        std::error_code ec;
+        std::filesystem::create_directories(outputDir, ec);
+        if (ec) {
+            std::cerr << "Failed to create final video output directory: "
+                      << outputDir.string() << " (" << ec.message() << ")" << std::endl;
+        }
+        return outputDir.generic_string();
+    }
+
+    std::string finalVideoOutputPath(const std::string& fileNameOrPath) {
+        const std::filesystem::path source(fileNameOrPath);
+        const std::filesystem::path fileName = source.filename().empty()
+            ? std::filesystem::path("highlight.mp4")
+            : source.filename();
+        return (std::filesystem::path(finalVideoOutputDir()) / fileName).generic_string();
     }
 
     std::string highlightType2Str(HighlightType type) {

@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>校园足球自动转播系统 UI Mockup</title>
+  <style>
+    :root {
+      --bg: #07110f;
+      --panel: rgba(9, 24, 21, .88);
+      --panel-2: rgba(15, 36, 31, .94);
+      --line: rgba(223, 247, 232, .16);
+      --text: #f3fff5;
+      --muted: #9db5a8;
+      --grass: #2c8e4d;
+      --grass-dark: #176138;
+      --lime: #e7ff63;
+      --mint: #47e3a0;
+      --sky: #58c8ff;
+      --orange: #ffb84d;
+      --red: #ff4d55;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 18px;
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      background:
+        linear-gradient(110deg, rgba(231, 255, 99, .08), transparent 28%),
+        linear-gradient(180deg, #101a18 0%, #07110f 48%, #040807 100%);
+    }
+
+    .layout {
+      max-width: 1320px;
+      margin: 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.08), transparent 32%),
+        rgba(3, 10, 8, .76);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+      overflow: hidden;
+    }
+
+    .large-mock {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      grid-template-rows: 58px minmax(0, 1fr) 86px;
+      gap: 14px;
+      min-height: calc(100vh - 36px);
+      padding: 14px;
+    }
+
+    .topbar {
+      grid-column: 1 / 3;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 14px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .brand {
+      min-width: 0;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .brand span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .scoreboard,
+    .clock {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .scoreboard {
+      min-width: 210px;
+      color: #06100d;
+      background: linear-gradient(135deg, var(--lime), #9af15d);
+      box-shadow: inset 0 -10px 18px rgba(23, 97, 56, .18);
+    }
+
+    .clock {
+      min-width: 178px;
+      border: 1px solid rgba(88, 200, 255, .34);
+      color: #dff7ff;
+      background: rgba(88, 200, 255, .13);
+    }
+
+    .main-video {
+      position: relative;
+      min-height: 0;
+      border: 1px solid rgba(245, 255, 240, .24);
+      border-radius: 8px;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.10) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,.08) 1px, transparent 1px),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 80px),
+        linear-gradient(135deg, #2e9652 0%, #19663a 48%, #8fbd58 100%);
+      background-size: 80px 80px, 80px 80px, auto, auto;
+      box-shadow: inset 0 0 0 999px rgba(0, 0, 0, .06);
+    }
+
+    .main-video::before {
+      content: "";
+      position: absolute;
+      inset: 7%;
+      border: 2px solid rgba(255,255,255,.42);
+      border-radius: 4px;
+    }
+
+    .main-video::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 20%;
+      aspect-ratio: 1;
+      border: 2px solid rgba(255,255,255,.35);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .video-label {
+      position: absolute;
+      left: 20px;
+      top: 18px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      z-index: 2;
+      padding: 9px 12px;
+      border-radius: 8px;
+      background: rgba(2, 9, 7, .74);
+      backdrop-filter: blur(8px);
+      font-weight: 900;
+    }
+
+    .live-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 0 5px rgba(255, 77, 85, .18);
+    }
+
+    .director-chip {
+      position: absolute;
+      right: 20px;
+      bottom: 18px;
+      z-index: 2;
+      padding: 12px 14px;
+      border: 1px solid rgba(231, 255, 99, .42);
+      border-radius: 8px;
+      color: #06100d;
+      background: linear-gradient(135deg, var(--lime), #b6f368);
+      font-weight: 900;
+    }
+
+    .player-chip {
+      position: absolute;
+      left: 42%;
+      top: 54%;
+      z-index: 2;
+      width: 76px;
+      height: 44px;
+      border: 2px solid var(--orange);
+      border-radius: 8px;
+      box-shadow: 0 0 0 999px rgba(0,0,0,0);
+    }
+
+    .player-chip::after {
+      content: "跟拍";
+      position: absolute;
+      left: -2px;
+      bottom: 100%;
+      padding: 3px 7px;
+      border-radius: 5px 5px 0 0;
+      color: #120b02;
+      background: var(--orange);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .right-stack {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 10px;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-weight: 900;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .status-pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mint);
+    }
+
+    .small-video {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      aspect-ratio: 16 / 9;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 7px;
+      overflow: hidden;
+      color: rgba(255,255,255,.82);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,.07) 1px, transparent 1px),
+        linear-gradient(135deg, #1d7044, #132420 62%, #5e8154);
+      background-size: 42px 42px, 42px 42px, auto;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 8px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 10px;
+      border-left: 4px solid var(--sky);
+      border-radius: 6px;
+      background: rgba(255,255,255,.07);
+      font-weight: 850;
+    }
+
+    .event.goal { border-left-color: var(--lime); }
+    .event.replay { border-left-color: var(--orange); }
+    .event time {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .bottom-controls {
+      grid-column: 1 / 3;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      min-height: 0;
+    }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      color: #06100d;
+      background: linear-gradient(135deg, var(--lime), #a7ee62);
+      font-size: 15px;
+      font-weight: 900;
+      box-shadow: inset 0 -10px 18px rgba(0, 0, 0, .08);
+    }
+
+    .btn.secondary {
+      color: var(--text);
+      background: rgba(255,255,255,.10);
+    }
+
+    .btn.follow {
+      color: #06100d;
+      background: linear-gradient(135deg, var(--sky), #63e3d0);
+    }
+
+    .btn.rec {
+      color: white;
+      background: linear-gradient(135deg, var(--red), #f07144);
+    }
+
+    @media (max-width: 1000px) {
+      body { padding: 10px; }
+      .large-mock {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto auto;
+        min-height: auto;
+      }
+      .topbar,
+      .bottom-controls { grid-column: auto; }
+      .topbar { grid-template-columns: 1fr; }
+      .scoreboard,
+      .clock { min-height: 48px; }
+      .bottom-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .main-video { aspect-ratio: 16 / 9; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="large-mock">
+      <div class="topbar">
+        <div class="brand">
+          <strong>校园足球自动转播</strong>
+          <span>双固定机位 · 软件跟拍 · 全场/个人高光</span>
+        </div>
+        <div class="scoreboard">主队 2 - 1 客队</div>
+        <div class="clock">上半场 12:08 · 正在录制</div>
+      </div>
+
+      <div class="main-video">
+        <div class="video-label"><span class="live-dot"></span>16:9 自动导播输出</div>
+        <div class="player-chip"></div>
+        <div class="director-chip">当前：软件跟拍</div>
+      </div>
+
+      <div class="right-stack">
+        <div class="panel">
+          <div class="panel-head">
+            <span>全景机位</span>
+            <span class="status-pill">稳定</span>
+          </div>
+          <div class="small-video">战术观察画面</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <span>辅助机位</span>
+            <span class="status-pill">待切换</span>
+          </div>
+          <div class="small-video">禁区/侧面画面</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <span>比赛时间线</span>
+            <span class="status-pill">实时</span>
+          </div>
+          <div class="timeline">
+            <div class="event goal"><time>14.8s</time><span>进球得分</span></div>
+            <div class="event"><time>25.1s</time><span>精彩进攻</span></div>
+            <div class="event replay"><time>37.3s</time><span>适合回看</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-controls">
+        <div class="btn">自动导播</div>
+        <div class="btn secondary">锁定全景</div>
+        <div class="btn follow">软件跟拍</div>
+        <div class="btn secondary">实时回看</div>
+        <div class="btn rec">结束录制</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

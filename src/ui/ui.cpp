@@ -77,11 +77,13 @@ void UIManager::run() {
 
     edit.exportGlobal("highlight_report.json");
     edit.exportPersonal("personal_highlight_report.json", "unknown");
-    edit.exportHighlightVideo("highlight.mp4");
+    const std::string highlightVideoPath = CommonTool::finalVideoOutputPath("highlight.mp4");
+    edit.exportHighlightVideo(highlightVideoPath);
     vs.release();
     cv::destroyAllWindows();
     std::cout << "Reports saved to highlight_report.json and personal_highlight_report.json" << std::endl;
-    std::cout << "Highlight video saved to highlight.mp4 when enough highlight frames are captured." << std::endl;
+    std::cout << "Highlight video saved to " << highlightVideoPath
+              << " when enough highlight frames are captured." << std::endl;
 }
 
 void UIManager::draw(cv::Mat& frame) {

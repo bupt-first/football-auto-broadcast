@@ -134,6 +134,7 @@ bool VideoEditorManager::init(int width, int height, int fps) {
     editorConfig.outputWidth = width;
     editorConfig.outputHeight = height;
     editorConfig.outputFps = fps;
+    editorConfig.outputDir = CommonTool::finalVideoOutputDir();
     prerollSeconds = editorConfig.preBufferSec;
     postrollSeconds = editorConfig.postBufferSec;
     recordingUntil = -1.0;
@@ -148,6 +149,7 @@ bool VideoEditorManager::init(int width, int height, int fps) {
 
 void VideoEditorManager::setConfig(const EditorConfig& newConfig) {
     editorConfig = newConfig;
+    editorConfig.outputDir = CommonTool::finalVideoOutputDir();
     videoWidth = std::max(1, editorConfig.outputWidth);
     videoHeight = std::max(1, editorConfig.outputHeight);
     videoFps = std::max(1, editorConfig.outputFps);
@@ -290,9 +292,10 @@ bool VideoEditorManager::exportVideo(
     const ProgressCallback& progressCallback,
     const FinishCallback& finishCallback
 ) const {
+    const std::string finalOutputPath = CommonTool::finalVideoOutputPath(outputPath);
     if (source.filePath.empty() || edl.empty()) {
         if (finishCallback) {
-            finishCallback(false, outputPath);
+            finishCallback(false, finalOutputPath);
         }
         return false;
     }
@@ -301,17 +304,17 @@ bool VideoEditorManager::exportVideo(
     if (!capture.isOpened()) {
         std::cerr << "Failed to open source video: " << source.filePath << std::endl;
         if (finishCallback) {
-            finishCallback(false, outputPath);
+            finishCallback(false, finalOutputPath);
         }
         return false;
     }
 
     const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
     cv::VideoWriter writer;
-    if (!writer.open(outputPath, fourcc, videoFps, cv::Size(videoWidth, videoHeight))) {
-        std::cerr << "Failed to open video writer: " << outputPath << std::endl;
+    if (!writer.open(finalOutputPath, fourcc, videoFps, cv::Size(videoWidth, videoHeight))) {
+        std::cerr << "Failed to open video writer: " << finalOutputPath << std::endl;
         if (finishCallback) {
-            finishCallback(false, outputPath);
+            finishCallback(false, finalOutputPath);
         }
         return false;
     }
@@ -401,7 +404,7 @@ bool VideoEditorManager::exportVideo(
         }
     }
     if (finishCallback) {
-        finishCallback(true, outputPath);
+        finishCallback(true, finalOutputPath);
     }
     return true;
 }
@@ -435,6 +438,7 @@ bool VideoEditorManager::exportGlobal(const std::string& path) {
 }
 
 bool VideoEditorManager::exportHighlightVideo(const std::string& path) {
+    const std::string finalOutputPath = CommonTool::finalVideoOutputPath(path);
     if (highlightFrames.empty()) {
         std::cerr << "No highlight frames captured, skip video export." << std::endl;
         return false;
@@ -442,8 +446,8 @@ bool VideoEditorManager::exportHighlightVideo(const std::string& path) {
 
     cv::VideoWriter writer;
     const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-    if (!writer.open(path, fourcc, videoFps, cv::Size(videoWidth, videoHeight))) {
-        std::cerr << "Failed to open video writer: " << path << std::endl;
+    if (!writer.open(finalOutputPath, fourcc, videoFps, cv::Size(videoWidth, videoHeight))) {
+        std::cerr << "Failed to open video writer: " << finalOutputPath << std::endl;
         return false;
     }
 
@@ -590,8 +594,8 @@ bool VideoEditorManager::writeReport(const std::string& path, const std::vector<
 
     out << "  ],\n";
     out << "  \"suggested_outputs\": {\n";
-    out << "    \"full_match\": \"" << jsonEscape(editorConfig.outputDir + "/full_highlights_" + timestampForFile() + ".mp4") << "\",\n";
-    out << "    \"personal\": \"" << jsonEscape(editorConfig.outputDir + "/player_{playerID}_{name}_" + timestampForFile() + ".mp4") << "\"\n";
+    out << "    \"full_match\": \"" << jsonEscape(CommonTool::finalVideoOutputPath("full_highlights_" + timestampForFile() + ".mp4")) << "\",\n";
+    out << "    \"personal\": \"" << jsonEscape(CommonTool::finalVideoOutputPath("player_{playerID}_{name}_" + timestampForFile() + ".mp4")) << "\"\n";
     out << "  }\n";
     out << "}\n";
     return true;

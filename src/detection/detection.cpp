@@ -45,6 +45,11 @@ bool TargetDetectionManager::init(const DetectionConfig& newConfig) {
     avgMotionEnergy = 0.0;
     previousTargets.clear();
     ballMotionHistory.clear();
+    ballTrack = BallTrack();
+    pendingBallCandidate = TargetInfo();
+    pendingBallStart = cv::Point2f();
+    pendingBallHits = 0;
+    pendingBallTimestamp = 0.0;
     return true;
 }
 
@@ -59,6 +64,26 @@ const DetectionConfig& TargetDetectionManager::getConfig() const {
 
 void TargetDetectionManager::reset() {
     init(config);
+}
+
+void TargetDetectionManager::seedBallTrack(const cv::Point2f& center, double timestamp, double radius) {
+    const int boxSize = std::max(8, static_cast<int>(std::round(std::max(8.0, radius) * 0.16)));
+    ballTrack.active = true;
+    ballTrack.position = center;
+    ballTrack.velocity = cv::Point2f(0.0f, 0.0f);
+    ballTrack.box = cv::Rect(
+        static_cast<int>(std::round(center.x)) - boxSize / 2,
+        static_cast<int>(std::round(center.y)) - boxSize / 2,
+        boxSize,
+        boxSize
+    );
+    ballTrack.confidence = config.confirmedBallConfidenceThreshold;
+    ballTrack.timestamp = timestamp;
+    ballTrack.hits = std::max(1, config.minBallTrackHits);
+    ballTrack.misses = 0;
+    pendingBallCandidate = TargetInfo();
+    pendingBallHits = 0;
+    pendingBallTimestamp = 0.0;
 }
 
 cv::Mat TargetDetectionManager::preprocessGray(const cv::Mat& frame) const {
@@ -82,7 +107,102 @@ double TargetDetectionManager::calculateMotionIntensity(const cv::Mat& diff) con
     return cv::mean(diff)[0];
 }
 
+double TargetDetectionManager::calculateBallColorScore(const cv::Mat& frame, const cv::Rect& box) const {
+    if (frame.empty() || box.empty()) {
+        return 0.0;
+    }
+
+    const cv::Rect safeBox = box & cv::Rect(0, 0, frame.cols, frame.rows);
+    if (safeBox.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat roi = frame(safeBox);
+    cv::Mat hsv;
+    cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+
+    cv::Mat brightMask;
+    cv::Mat whiteMask;
+    cv::inRange(hsv, cv::Scalar(0, 0, 135), cv::Scalar(179, 95, 255), whiteMask);
+    cv::inRange(hsv, cv::Scalar(0, 0, 175), cv::Scalar(179, 180, 255), brightMask);
+
+    const double pixels = std::max(1, safeBox.width * safeBox.height);
+    const double whiteRatio = cv::countNonZero(whiteMask) / pixels;
+    const double brightRatio = cv::countNonZero(brightMask) / pixels;
+    return clampDouble(0.72 * whiteRatio + 0.28 * brightRatio, 0.0, 1.0);
+}
+
+double TargetDetectionManager::calculateGrassColorScore(const cv::Mat& frame, const cv::Rect& box) const {
+    if (frame.empty() || box.empty()) {
+        return 0.0;
+    }
+
+    const cv::Rect safeBox = box & cv::Rect(0, 0, frame.cols, frame.rows);
+    if (safeBox.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat hsv;
+    cv::cvtColor(frame(safeBox), hsv, cv::COLOR_BGR2HSV);
+
+    cv::Mat grassMask;
+    cv::inRange(hsv, cv::Scalar(35, 35, 35), cv::Scalar(95, 255, 230), grassMask);
+    return clampDouble(
+        cv::countNonZero(grassMask) / static_cast<double>(std::max(1, safeBox.width * safeBox.height)),
+        0.0,
+        1.0
+    );
+}
+
+double TargetDetectionManager::calculateSkinColorScore(const cv::Mat& frame, const cv::Rect& box) const {
+    if (frame.empty() || box.empty()) {
+        return 0.0;
+    }
+
+    const cv::Rect safeBox = box & cv::Rect(0, 0, frame.cols, frame.rows);
+    if (safeBox.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat hsv;
+    cv::cvtColor(frame(safeBox), hsv, cv::COLOR_BGR2HSV);
+
+    cv::Mat skinMask;
+    cv::inRange(hsv, cv::Scalar(0, 20, 55), cv::Scalar(28, 190, 255), skinMask);
+    return clampDouble(
+        cv::countNonZero(skinMask) / static_cast<double>(std::max(1, safeBox.width * safeBox.height)),
+        0.0,
+        1.0
+    );
+}
+
+double TargetDetectionManager::calculateSaturatedColorScore(const cv::Mat& frame, const cv::Rect& box) const {
+    if (frame.empty() || box.empty()) {
+        return 0.0;
+    }
+
+    const cv::Rect safeBox = box & cv::Rect(0, 0, frame.cols, frame.rows);
+    if (safeBox.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat hsv;
+    cv::cvtColor(frame(safeBox), hsv, cv::COLOR_BGR2HSV);
+
+    cv::Mat saturatedMask;
+    cv::inRange(hsv, cv::Scalar(0, 90, 70), cv::Scalar(179, 255, 255), saturatedMask);
+    return clampDouble(
+        cv::countNonZero(saturatedMask) / static_cast<double>(std::max(1, safeBox.width * safeBox.height)),
+        0.0,
+        1.0
+    );
+}
+
 std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame) {
+    return detect(frame, CommonTool::getCurrentTimestamp());
+}
+
+std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame, double timestamp) {
     std::vector<TargetInfo> targets;
     if (frame.empty()) {
         return targets;
@@ -96,6 +216,17 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame) {
         lastGray = gray.clone();
         previousTargets.clear();
         ballMotionHistory.clear();
+        if (ballTrack.active && ballTrack.hits >= config.minBallTrackHits) {
+            TargetInfo seededBall;
+            seededBall.type = TargetType::BALL;
+            seededBall.box = ballTrack.box;
+            seededBall.confidence = ballTrack.confidence;
+            seededBall.timestamp = timestamp;
+            targets.push_back(seededBall);
+            previousTargets = targets;
+        } else {
+            ballTrack = BallTrack();
+        }
         return targets;
     }
 
@@ -124,7 +255,6 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame) {
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    const double timestamp = CommonTool::getCurrentTimestamp();
     const cv::Rect frameBounds(0, 0, frame.cols, frame.rows);
     for (const auto& contour : contours) {
         const double area = cv::contourArea(contour);
@@ -139,9 +269,17 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame) {
 
         const double aspect = static_cast<double>(box.width) / std::max(1, box.height);
         const double fillRatio = area / std::max(1.0, rectArea(box));
+        const double ballColorScore = calculateBallColorScore(frame, box);
+        const double grassScore = calculateGrassColorScore(frame, box);
+        const double skinScore = calculateSkinColorScore(frame, box);
+        const double saturatedScore = calculateSaturatedColorScore(frame, box);
         const bool ballLike = area <= config.ballAreaThreshold &&
             aspect > 0.45 && aspect < 2.2 &&
-            fillRatio > 0.18;
+            fillRatio > 0.18 &&
+            ballColorScore >= config.ballColorThreshold &&
+            grassScore < config.ballGrassRejectThreshold &&
+            skinScore < config.ballSkinRejectThreshold &&
+            saturatedScore < config.ballSaturationRejectThreshold;
 
         TargetInfo target;
         target.type = ballLike ? TargetType::BALL : TargetType::PLAYER;
@@ -155,12 +293,31 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame) {
             ? 1.0 - std::abs(1.0 - aspect) * 0.35
             : clampDouble(static_cast<double>(box.height) / std::max(1, box.width), 0.2, 2.0) / 2.0;
         const double motionScore = clampDouble(motionIntensity / std::max(1.0, adaptiveThreshold), 0.0, 1.0);
-        target.confidence = clampDouble(0.50 * areaScore + 0.30 * shapeScore + 0.20 * motionScore, 0.0, 1.0);
+        if (target.type == TargetType::BALL) {
+            const double sizeScore = 1.0 - std::abs(area - config.ballAreaThreshold * 0.45) /
+                std::max(1.0, config.ballAreaThreshold);
+            const double compactScore = clampDouble(fillRatio, 0.0, 1.0);
+            target.confidence = clampDouble(
+                0.34 * clampDouble(sizeScore, 0.0, 1.0) +
+                0.30 * clampDouble(shapeScore, 0.0, 1.0) +
+                0.20 * ballColorScore +
+                0.10 * compactScore +
+                0.06 * motionScore -
+                0.18 * grassScore -
+                0.16 * skinScore -
+                0.12 * saturatedScore,
+                0.0,
+                1.0
+            );
+        } else {
+            target.confidence = clampDouble(0.50 * areaScore + 0.30 * shapeScore + 0.20 * motionScore, 0.0, 1.0);
+        }
 
         targets.push_back(target);
     }
 
     targets = refineTargets(targets);
+    targets = applyBallTrajectoryGate(targets, timestamp);
     std::sort(targets.begin(), targets.end(), [](const TargetInfo& lhs, const TargetInfo& rhs) {
         if (lhs.type != rhs.type) {
             return lhs.type == TargetType::BALL;
@@ -212,6 +369,284 @@ std::vector<TargetInfo> TargetDetectionManager::refineTargets(const std::vector<
         }
     }
     return refined;
+}
+
+bool TargetDetectionManager::isLikelyPlayerHeadCandidate(
+    const TargetInfo& candidate,
+    const std::vector<TargetInfo>& players
+) const {
+    const cv::Point2f candidateCenter = rectCenter(candidate.box);
+    const double candidateArea = rectArea(candidate.box);
+    if (candidateArea <= 0.0) {
+        return false;
+    }
+
+    for (const auto& player : players) {
+        if (player.box.empty()) {
+            continue;
+        }
+
+        const cv::Rect expandedPlayer(
+            player.box.x - player.box.width / 5,
+            player.box.y - player.box.height / 8,
+            player.box.width + player.box.width * 2 / 5,
+            player.box.height + player.box.height / 4
+        );
+        if (!expandedPlayer.contains(cv::Point(
+                static_cast<int>(std::round(candidateCenter.x)),
+                static_cast<int>(std::round(candidateCenter.y))))) {
+            continue;
+        }
+
+        const double playerArea = rectArea(player.box);
+        const double relativeArea = candidateArea / std::max(1.0, playerArea);
+        const double headBandBottom = player.box.y + player.box.height * 0.42;
+        if (candidateCenter.y <= headBandBottom && relativeArea >= 0.006 && relativeArea <= 0.12) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool TargetDetectionManager::hasNearbyPlayerContext(
+    const TargetInfo& candidate,
+    const std::vector<TargetInfo>& players,
+    double maxDistance
+) const {
+    if (players.empty()) {
+        return true;
+    }
+
+    const cv::Point2f candidateCenter = rectCenter(candidate.box);
+    for (const auto& player : players) {
+        if (player.box.empty()) {
+            continue;
+        }
+
+        const cv::Point2f playerCenter = rectCenter(player.box);
+        if (pointDistance(candidateCenter, playerCenter) <= maxDistance) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool TargetDetectionManager::isValidAutoBallBootstrapCandidate(const TargetInfo& candidate) const {
+    if (candidate.box.empty() || lastFrameSize.width <= 0 || lastFrameSize.height <= 0) {
+        return false;
+    }
+
+    const cv::Point2f center = rectCenter(candidate.box);
+    const double sideMargin = lastFrameSize.width * config.autoBallBootstrapSideMarginRatio;
+    if (center.x < sideMargin || center.x > lastFrameSize.width - sideMargin) {
+        return false;
+    }
+
+    const double upperPlayLimit = lastFrameSize.height * config.autoBallBootstrapTopRatio;
+    const double lowerPlayLimit = lastFrameSize.height * config.autoBallBootstrapBottomRatio;
+    if (center.y < upperPlayLimit || center.y > lowerPlayLimit) {
+        return false;
+    }
+
+    const double aspect = static_cast<double>(candidate.box.width) / std::max(1, candidate.box.height);
+    if (aspect < config.autoBallBootstrapMinAspect || aspect > config.autoBallBootstrapMaxAspect) {
+        return false;
+    }
+
+    const double areaRatio = rectArea(candidate.box) / std::max(1.0, config.ballAreaThreshold);
+    return areaRatio <= config.autoBallBootstrapMaxAreaRatio;
+}
+
+bool TargetDetectionManager::updateAutoBallBootstrap(
+    const TargetInfo& candidate,
+    const std::vector<TargetInfo>& players,
+    double timestamp
+) {
+    if (!isValidAutoBallBootstrapCandidate(candidate)) {
+        pendingBallCandidate = TargetInfo();
+        pendingBallHits = 0;
+        pendingBallTimestamp = timestamp;
+        return false;
+    }
+
+    if (!hasNearbyPlayerContext(candidate, players, config.closePlayerDistance * 2.8)) {
+        pendingBallCandidate = TargetInfo();
+        pendingBallHits = 0;
+        pendingBallTimestamp = timestamp;
+        return false;
+    }
+
+    const cv::Point2f center = rectCenter(candidate.box);
+    if (pendingBallHits <= 0 || timestamp - pendingBallTimestamp > 0.35) {
+        pendingBallCandidate = candidate;
+        pendingBallStart = center;
+        pendingBallHits = 1;
+        pendingBallTimestamp = timestamp;
+        return false;
+    }
+
+    const cv::Point2f previousCenter = rectCenter(pendingBallCandidate.box);
+    const double shiftFromPrevious = pointDistance(center, previousCenter);
+    const double shiftFromStart = pointDistance(center, pendingBallStart);
+    if (shiftFromPrevious > config.autoBallBootstrapGate ||
+        shiftFromStart < config.autoBallBootstrapMinShift ||
+        shiftFromStart > config.autoBallBootstrapMaxShift) {
+        pendingBallCandidate = candidate;
+        pendingBallStart = center;
+        pendingBallHits = 1;
+        pendingBallTimestamp = timestamp;
+        return false;
+    }
+
+    pendingBallCandidate = candidate;
+    ++pendingBallHits;
+    pendingBallTimestamp = timestamp;
+    return pendingBallHits >= config.autoBallBootstrapHits;
+}
+
+std::vector<TargetInfo> TargetDetectionManager::applyBallTrajectoryGate(
+    const std::vector<TargetInfo>& targets,
+    double timestamp
+) {
+    std::vector<TargetInfo> filtered;
+    std::vector<TargetInfo> ballCandidates;
+
+    for (const auto& target : targets) {
+        if (target.type == TargetType::BALL) {
+            if (target.confidence >= config.ballCandidateConfidenceThreshold) {
+                ballCandidates.push_back(target);
+            }
+        } else {
+            filtered.push_back(target);
+        }
+    }
+
+    TargetInfo bestCandidate;
+    bool hasCandidate = false;
+    double bestScore = -1.0;
+
+    const double dt = ballTrack.active
+        ? std::max(timestamp - ballTrack.timestamp, 1.0 / FPS)
+        : 1.0 / FPS;
+    const cv::Point2f predicted = ballTrack.active
+        ? ballTrack.position + ballTrack.velocity * static_cast<float>(dt)
+        : cv::Point2f();
+    const double predictedSpeed = ballTrack.active
+        ? std::sqrt(ballTrack.velocity.x * ballTrack.velocity.x + ballTrack.velocity.y * ballTrack.velocity.y)
+        : 0.0;
+    const double gate = config.ballPredictionGate +
+        clampDouble(predictedSpeed * dt * 0.65, 0.0, 80.0) +
+        ballTrack.misses * 25.0;
+
+    for (const auto& candidate : ballCandidates) {
+        if (isLikelyPlayerHeadCandidate(candidate, filtered)) {
+            continue;
+        }
+
+        const cv::Point2f center = rectCenter(candidate.box);
+        double trajectoryScore = 0.45;
+        if (ballTrack.active) {
+            const double distance = pointDistance(center, predicted);
+            const double allowedGate = predictedSpeed < 80.0 && ballTrack.hits >= config.minBallTrackHits
+                ? std::min(gate, 32.0)
+                : gate;
+            if (distance > allowedGate && ballTrack.hits >= config.minBallTrackHits) {
+                continue;
+            }
+            trajectoryScore = 1.0 - clampDouble(distance / std::max(1.0, allowedGate), 0.0, 1.0);
+        }
+
+        const double area = rectArea(candidate.box);
+        const double areaScore = 1.0 - std::abs(area - config.ballAreaThreshold * 0.45) /
+            std::max(1.0, config.ballAreaThreshold);
+        const double score = 0.58 * candidate.confidence +
+            0.28 * trajectoryScore +
+            0.14 * clampDouble(areaScore, 0.0, 1.0);
+
+        if (!ballTrack.active) {
+            const double bootstrapScore = score +
+                (hasNearbyPlayerContext(candidate, filtered, config.closePlayerDistance * 1.8) ? 0.08 : -0.18);
+            if (!isValidAutoBallBootstrapCandidate(candidate) ||
+                bootstrapScore < config.confirmedBallConfidenceThreshold + 0.12) {
+                continue;
+            }
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestCandidate = candidate;
+            hasCandidate = true;
+        }
+    }
+
+    if (hasCandidate) {
+        if (!ballTrack.active && !updateAutoBallBootstrap(bestCandidate, filtered, timestamp)) {
+            return filtered;
+        }
+
+        TargetInfo confirmed = bestCandidate;
+        confirmed.confidence = clampDouble(bestScore, 0.0, 1.0);
+
+        const cv::Point2f center = rectCenter(confirmed.box);
+        if (ballTrack.active) {
+            const double safeDt = std::max(timestamp - ballTrack.timestamp, 1.0 / FPS);
+            const cv::Point2f measuredVelocity = (center - ballTrack.position) * static_cast<float>(1.0 / safeDt);
+            ballTrack.velocity = ballTrack.velocity * 0.55f + measuredVelocity * 0.45f;
+        } else {
+            ballTrack.velocity = cv::Point2f(0.0f, 0.0f);
+        }
+
+        ballTrack.active = true;
+        ballTrack.position = center;
+        ballTrack.box = confirmed.box;
+        ballTrack.confidence = confirmed.confidence;
+        ballTrack.timestamp = timestamp;
+        ballTrack.hits = std::min(ballTrack.hits + 1, FPS * 2);
+        ballTrack.misses = 0;
+        pendingBallCandidate = TargetInfo();
+        pendingBallHits = 0;
+        pendingBallTimestamp = 0.0;
+
+        if (ballTrack.hits >= config.minBallTrackHits &&
+            confirmed.confidence >= config.confirmedBallConfidenceThreshold) {
+            filtered.push_back(confirmed);
+        }
+    } else if (ballTrack.active && ballTrack.hits >= config.minBallTrackHits && ballTrack.misses <= 2) {
+        const double predictDt = std::max(timestamp - ballTrack.timestamp, 1.0 / FPS);
+        const cv::Point2f predictedCenter = ballTrack.position + ballTrack.velocity * static_cast<float>(predictDt);
+        const cv::Point2f clampedCenter(
+            clampDouble(predictedCenter.x, 0.0, std::max(0, lastFrameSize.width - 1)),
+            clampDouble(predictedCenter.y, 0.0, std::max(0, lastFrameSize.height - 1))
+        );
+        TargetInfo confirmed;
+        confirmed.type = TargetType::BALL;
+        confirmed.box = cv::Rect(
+            static_cast<int>(std::round(clampedCenter.x - ballTrack.box.width * 0.5f)),
+            static_cast<int>(std::round(clampedCenter.y - ballTrack.box.height * 0.5f)),
+            ballTrack.box.width,
+            ballTrack.box.height
+        ) & cv::Rect(0, 0, lastFrameSize.width, lastFrameSize.height);
+        confirmed.confidence = ballTrack.confidence * 0.82;
+        confirmed.timestamp = timestamp;
+        ++ballTrack.misses;
+        ballTrack.position = clampedCenter;
+        ballTrack.box = confirmed.box;
+        ballTrack.confidence = confirmed.confidence;
+        ballTrack.timestamp = timestamp;
+        if (!confirmed.box.empty() && confirmed.confidence >= config.confirmedBallConfidenceThreshold * 0.75) {
+            filtered.push_back(confirmed);
+        }
+    } else if (ballTrack.active) {
+        const double elapsed = timestamp - ballTrack.timestamp;
+        ++ballTrack.misses;
+        if (elapsed > config.ballLostTimeout) {
+            ballTrack = BallTrack();
+        }
+    }
+
+    return filtered;
 }
 
 void TargetDetectionManager::updateMotionHistory(const std::vector<TargetInfo>& targets, double timestamp) {
