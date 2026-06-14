@@ -3,11 +3,13 @@
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QResizeEvent>
@@ -88,6 +90,8 @@ VideoPane::VideoPane(const QString& title, QWidget* parent)
     imageLabel->setMinimumSize(320, 180);
     imageLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     imageLabel->setObjectName("videoSurface");
+    imageLabel->installEventFilter(this);
+    imageLabel->setCursor(Qt::CrossCursor);
 
     scrollArea = new QScrollArea(this);
     scrollArea->setWidget(imageLabel);
@@ -141,13 +145,54 @@ int VideoPane::zoomPercent() const {
     return currentZoomPercent;
 }
 
+void VideoPane::setFrameClickCallback(std::function<void(const cv::Point2f&)> callback) {
+    frameClickCallback = std::move(callback);
+}
+
+bool VideoPane::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == imageLabel && event->type() == QEvent::MouseButtonPress && frameClickCallback) {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            cv::Point2f framePoint;
+            if (mapWidgetPointToFrame(mouseEvent->position().toPoint(), framePoint)) {
+                frameClickCallback(framePoint);
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void VideoPane::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updatePixmap();
 }
 
+bool VideoPane::mapWidgetPointToFrame(const QPoint& point, cv::Point2f& framePoint) const {
+    if (currentImage.isNull() || currentPixmapSize.isEmpty()) {
+        return false;
+    }
+
+    const QSize labelSize = imageLabel->size();
+    const int offsetX = std::max(0, (labelSize.width() - currentPixmapSize.width()) / 2);
+    const int offsetY = std::max(0, (labelSize.height() - currentPixmapSize.height()) / 2);
+    const int localX = point.x() - offsetX;
+    const int localY = point.y() - offsetY;
+
+    if (localX < 0 || localY < 0 || localX >= currentPixmapSize.width() || localY >= currentPixmapSize.height()) {
+        return false;
+    }
+
+    framePoint.x = static_cast<float>(localX) * static_cast<float>(currentImage.width()) /
+        static_cast<float>(std::max(1, currentPixmapSize.width()));
+    framePoint.y = static_cast<float>(localY) * static_cast<float>(currentImage.height()) /
+        static_cast<float>(std::max(1, currentPixmapSize.height()));
+    return true;
+}
+
 void VideoPane::updatePixmap() {
     if (currentImage.isNull()) {
+        currentPixmapSize = QSize();
         imageLabel->clear();
         imageLabel->setText("暂无画面");
         return;
@@ -166,6 +211,7 @@ void VideoPane::updatePixmap() {
         Qt::KeepAspectRatio,
         Qt::SmoothTransformation
     );
+    currentPixmapSize = pixmap.size();
     imageLabel->setPixmap(pixmap);
 }
 
@@ -217,13 +263,19 @@ void QtBroadcastWindow::setupUi() {
         processFrame();
     });
 
-    broadcastPane = new VideoPane("自动导播输出", this);
+    broadcastPane = new VideoPane("16:9 自动导播输出", this);
     panoramaPane = new VideoPane("全景机位", this);
     closeupPane = new VideoPane("辅助机位", this);
+    panoramaPane->setFrameClickCallback([this](const cv::Point2f& point) {
+        seedPanoramaBall(point);
+    });
 
     autoModeButton = new QRadioButton("自动导播", this);
     forcePanoramaButton = new QRadioButton("锁定全景", this);
     forceFollowButton = new QRadioButton("软件跟拍", this);
+    autoModeButton->setObjectName("autoModeButton");
+    forcePanoramaButton->setObjectName("panoramaModeButton");
+    forceFollowButton->setObjectName("followModeButton");
     autoModeButton->setChecked(true);
 
     auto* modeGroup = new QButtonGroup(this);
@@ -265,7 +317,7 @@ void QtBroadcastWindow::setupUi() {
 
     auto* brandTitle = new QLabel("校园足球自动转播系统", this);
     brandTitle->setObjectName("brandTitle");
-    auto* brandSubtitle = new QLabel("双固定机位 · 软件虚拟导播 · 全场高光与个人集锦", this);
+    auto* brandSubtitle = new QLabel("双固定机位 · 软件跟拍 · 全场高光与个人集锦", this);
     brandSubtitle->setObjectName("brandSubtitle");
 
     auto* brandLayout = new QVBoxLayout();
@@ -323,7 +375,7 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
         timelineLayout->addWidget(item);
     }
     timelineLayout->addStretch(1);
-    sideLayout->addWidget(createInfoPanel("比赛时间线", "只显示观众关心的关键事件", timelineContent), 1);
+    sideLayout->addWidget(createInfoPanel("比赛时间线", "实时关键事件", timelineContent), 1);
 
     auto* modeContent = new QWidget(this);
     auto* modeLayout = new QVBoxLayout(modeContent);
@@ -346,7 +398,7 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
 
     auto* bottomLayout = new QHBoxLayout();
     bottomLayout->setSpacing(0);
-    bottomLayout->addWidget(createInfoPanel("一键操作", "普通用户默认模式，专业参数已收起", modeContent), 1);
+    bottomLayout->addWidget(createInfoPanel("一键操作", "直播台常用控制", modeContent), 1);
 
     auto* grid = new QGridLayout(tab);
     grid->setContentsMargins(16, 16, 16, 12);
@@ -501,41 +553,43 @@ QListWidget* QtBroadcastWindow::createHighlightList(bool personal) {
 
 void QtBroadcastWindow::setupStyle() {
     setStyleSheet(
-        "QMainWindow, QWidget { background: #07100d; color: #edf4ef; font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI'; }"
-        "QWidget#qt_scrollarea_viewport { background: #06100d; }"
-        "QScrollArea { background: #06100d; border: 1px solid rgba(238, 247, 239, 44); border-radius: 6px; }"
-        "QFrame#infoPanel, VideoPane { background: rgba(8, 17, 14, 220); border: 1px solid rgba(238, 247, 239, 34); border-radius: 8px; }"
-        "QLabel#videoSurface { background: #06100d; color: #6f8178; font-size: 16px; font-weight: 800; }"
-        "QLabel#brandTitle { color: #f5fff0; font-size: 24px; font-weight: 900; }"
-        "QLabel#brandSubtitle { color: #9ab1a5; font-size: 13px; font-weight: 700; }"
-        "QLabel#scoreLabel { color: #07100d; background: #d6f25f; padding: 10px 20px; font-size: 19px; font-weight: 900; border-radius: 6px; }"
-        "QLabel#clockLabel { color: #edf4ef; background: rgba(238, 247, 239, 20); border: 1px solid rgba(238, 247, 239, 42); padding: 10px 16px; font-weight: 900; border-radius: 6px; }"
-        "QLabel#paneTitle { color: #f4f7f3; font-size: 15px; font-weight: 900; }"
-        "QLabel#statusLabel { color: #aab9b2; padding: 8px 14px; border-top: 1px solid rgba(238, 247, 239, 22); }"
-        "QLabel#decisionLabel { color: #d6f25f; font-size: 15px; font-weight: 800; }"
-        "QLabel#panelTitle { color: #f5fff0; font-size: 16px; font-weight: 900; }"
-        "QLabel#panelSubtitle { color: #8fa598; font-size: 11px; font-weight: 700; }"
-        "QLabel#timelineItem { color: #edf4ef; background: rgba(238, 247, 239, 18); border-left: 4px solid #45d9ff; padding: 8px 10px; font-weight: 800; border-radius: 4px; }"
-        "QLabel#previewPlaceholder { color: #f5fff0; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1e6b42, stop:0.55 #173923, stop:1 #98bb63); border: 1px solid rgba(238, 247, 239, 42); border-radius: 8px; font-size: 28px; font-weight: 900; }"
-        "QLabel#previewPlaceholder span { color: rgba(245, 255, 240, 190); font-size: 15px; font-weight: 700; }"
-        "QLabel#metricCard { color: #d6f25f; background: rgba(238, 247, 239, 15); border: 1px solid rgba(238, 247, 239, 28); padding: 10px; font-weight: 900; border-radius: 6px; }"
-        "QLabel#metricCard span { color: #8fa598; font-size: 11px; }"
-        "QLabel#metricCard strong { color: #d6f25f; font-size: 22px; }"
-        "QPushButton { background: #d6f25f; color: #07100d; border: 0; border-radius: 6px; padding: 13px 18px; font-size: 14px; font-weight: 900; }"
-        "QPushButton:hover { background: #edff8f; }"
-        "QPushButton#recordButton { background: #ff4c4c; color: #ffffff; }"
-        "QPushButton#secondaryButton { background: rgba(238, 247, 239, 24); color: #edf4ef; border: 1px solid rgba(238, 247, 239, 40); }"
-        "QRadioButton { spacing: 8px; padding: 13px 18px; color: #e8efe9; font-size: 14px; font-weight: 900; background: rgba(238, 247, 239, 16); border: 1px solid rgba(238, 247, 239, 30); border-radius: 6px; }"
+        "QMainWindow, QWidget { background: #07110f; color: #f3fff5; font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI'; }"
+        "QWidget#qt_scrollarea_viewport { background: #050c0a; }"
+        "QScrollArea { background: #050c0a; border: 1px solid rgba(223, 247, 232, 44); border-radius: 8px; }"
+        "QFrame#infoPanel, VideoPane { background: rgba(9, 24, 21, 232); border: 1px solid rgba(223, 247, 232, 38); border-radius: 8px; }"
+        "QLabel#videoSurface { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e9652, stop:0.52 #19663a, stop:1 #8fbd58); color: rgba(243, 255, 245, 205); font-size: 17px; font-weight: 900; }"
+        "QLabel#brandTitle { color: #f3fff5; font-size: 24px; font-weight: 900; }"
+        "QLabel#brandSubtitle { color: #9db5a8; font-size: 13px; font-weight: 800; }"
+        "QLabel#scoreLabel { color: #06100d; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #9af15d); padding: 10px 22px; font-size: 20px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#clockLabel { color: #dff7ff; background: rgba(88, 200, 255, 32); border: 1px solid rgba(88, 200, 255, 88); padding: 10px 16px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#paneTitle { color: #f3fff5; font-size: 15px; font-weight: 900; padding-bottom: 2px; }"
+        "QLabel#statusLabel { color: #9db5a8; padding: 8px 14px; border-top: 1px solid rgba(223, 247, 232, 24); }"
+        "QLabel#decisionLabel { color: #e7ff63; background: rgba(231, 255, 99, 18); border: 1px solid rgba(231, 255, 99, 48); border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 900; }"
+        "QLabel#panelTitle { color: #f3fff5; font-size: 16px; font-weight: 900; }"
+        "QLabel#panelSubtitle { color: #9db5a8; font-size: 11px; font-weight: 800; }"
+        "QLabel#timelineItem { color: #f3fff5; background: rgba(255, 255, 255, 18); border-left: 4px solid #58c8ff; padding: 9px 10px; font-weight: 900; border-radius: 6px; }"
+        "QLabel#previewPlaceholder { color: #f3fff5; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e9652, stop:0.48 #19663a, stop:1 #8fbd58); border: 1px solid rgba(245, 255, 240, 64); border-radius: 8px; font-size: 28px; font-weight: 900; }"
+        "QLabel#previewPlaceholder span { color: rgba(243, 255, 245, 205); font-size: 15px; font-weight: 800; }"
+        "QLabel#metricCard { color: #e7ff63; background: rgba(255, 255, 255, 17); border: 1px solid rgba(223, 247, 232, 34); padding: 11px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#metricCard span { color: #9db5a8; font-size: 11px; font-weight: 800; }"
+        "QLabel#metricCard strong { color: #e7ff63; font-size: 23px; }"
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #a7ee62); color: #06100d; border: 0; border-radius: 8px; padding: 13px 18px; font-size: 14px; font-weight: 900; }"
+        "QPushButton:hover { background: #f0ff8f; }"
+        "QPushButton#recordButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff4d55, stop:1 #f07144); color: #ffffff; }"
+        "QPushButton#secondaryButton { background: rgba(255, 255, 255, 24); color: #f3fff5; border: 1px solid rgba(223, 247, 232, 42); }"
+        "QRadioButton { spacing: 8px; padding: 13px 18px; color: #f3fff5; font-size: 14px; font-weight: 900; background: rgba(255, 255, 255, 18); border: 1px solid rgba(223, 247, 232, 34); border-radius: 8px; }"
         "QRadioButton::indicator { width: 0px; height: 0px; }"
-        "QRadioButton:checked { color: #07100d; background: #45d9ff; border-color: #45d9ff; }"
+        "QRadioButton:checked { color: #06100d; background: #e7ff63; border-color: #e7ff63; }"
+        "QRadioButton#followModeButton:checked { background: #58c8ff; border-color: #58c8ff; }"
+        "QRadioButton#panoramaModeButton:checked { background: #47e3a0; border-color: #47e3a0; }"
         "QTabWidget::pane { border: 0; background: transparent; }"
-        "QTabBar::tab { background: rgba(238, 247, 239, 16); color: #8fa598; padding: 10px 18px; margin-right: 7px; font-weight: 900; border: 1px solid rgba(238, 247, 239, 28); }"
-        "QTabBar::tab:selected { background: #d6f25f; color: #07100d; border-color: #d6f25f; }"
-        "QListWidget { background: rgba(238, 247, 239, 12); border: 1px solid rgba(238, 247, 239, 28); color: #edf4ef; outline: 0; }"
-        "QListWidget::item { padding: 10px; border-bottom: 1px solid rgba(238, 247, 239, 22); }"
-        "QListWidget::item:selected { background: rgba(69, 217, 255, 58); color: #ffffff; }"
-        "QSlider::groove:horizontal { height: 5px; background: #32423b; border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 16px; margin: -6px 0; border-radius: 8px; background: #d6f25f; }"
+        "QTabBar::tab { background: rgba(255, 255, 255, 16); color: #9db5a8; padding: 10px 18px; margin-right: 7px; font-weight: 900; border: 1px solid rgba(223, 247, 232, 30); border-top-left-radius: 7px; border-top-right-radius: 7px; }"
+        "QTabBar::tab:selected { background: #e7ff63; color: #06100d; border-color: #e7ff63; }"
+        "QListWidget { background: rgba(255, 255, 255, 13); border: 1px solid rgba(223, 247, 232, 32); color: #f3fff5; outline: 0; border-radius: 7px; }"
+        "QListWidget::item { padding: 10px; border-bottom: 1px solid rgba(223, 247, 232, 24); }"
+        "QListWidget::item:selected { background: rgba(88, 200, 255, 70); color: #ffffff; }"
+        "QSlider::groove:horizontal { height: 5px; background: #31453b; border-radius: 2px; }"
+        "QSlider::handle:horizontal { width: 16px; margin: -6px 0; border-radius: 8px; background: #e7ff63; }"
     );
 }
 
@@ -545,6 +599,8 @@ void QtBroadcastWindow::processFrame() {
         statusLabel->setText("Camera frame read failed. Check device connection.");
         return;
     }
+    lastFrameTimestamp = frame.timestamp;
+    lastPanoramaFrameSize = frame.panorama.size();
 
     const std::vector<TargetInfo> panoramaTargets = panoramaDetection.detect(frame.panorama, frame.timestamp);
     const std::vector<TargetInfo> closeupTargets = closeupDetection.detect(frame.closeup, frame.timestamp);
@@ -555,7 +611,9 @@ void QtBroadcastWindow::processFrame() {
 
     const cv::Mat broadcastFrame = renderBroadcastFrame(frame, decision, panoramaTargets, closeupTargets, faces);
 
-    panoramaPane->setFrame(normalizeFrame(frame.panorama));
+    cv::Mat panoramaMonitor = normalizeFrame(frame.panorama);
+    drawPanoramaSeed(panoramaMonitor);
+    panoramaPane->setFrame(panoramaMonitor);
     closeupPane->setFrame(normalizeFrame(frame.closeup));
     broadcastPane->setFrame(broadcastFrame);
 
@@ -822,6 +880,46 @@ void QtBroadcastWindow::updateStatusText(const BroadcastDecision& decision, cons
         .arg(recording ? "正在录制" : "待命中")
         .arg(modeLabel(decision.mode))
         .arg(QString::fromStdString(formatTimestamp(frame.timestamp))));
+}
+
+void QtBroadcastWindow::seedPanoramaBall(const cv::Point2f& normalizedPoint) {
+    if (lastPanoramaFrameSize.width <= 0 || lastPanoramaFrameSize.height <= 0) {
+        return;
+    }
+
+    const double scaleX = static_cast<double>(lastPanoramaFrameSize.width) / VIDEO_WIDTH;
+    const double scaleY = static_cast<double>(lastPanoramaFrameSize.height) / VIDEO_HEIGHT;
+    const cv::Point2f sourcePoint(
+        static_cast<float>(normalizedPoint.x * scaleX),
+        static_cast<float>(normalizedPoint.y * scaleY)
+    );
+    const double sourceRadius = panoramaSeedDisplayRadius * std::max(scaleX, scaleY);
+
+    panoramaDetection.seedBallTrack(sourcePoint, lastFrameTimestamp, sourceRadius);
+    panoramaSeedActive = true;
+    panoramaSeedDisplayCenter = normalizedPoint;
+
+    if (statusLabel) {
+        statusLabel->setText(QString("Ball seed set at x=%1 y=%2. Click panorama again to correct drift.")
+            .arg(static_cast<int>(std::round(normalizedPoint.x)))
+            .arg(static_cast<int>(std::round(normalizedPoint.y))));
+    }
+}
+
+void QtBroadcastWindow::drawPanoramaSeed(cv::Mat& frame) const {
+    if (!panoramaSeedActive || frame.empty()) {
+        return;
+    }
+
+    const double scaleX = static_cast<double>(frame.cols) / VIDEO_WIDTH;
+    const double scaleY = static_cast<double>(frame.rows) / VIDEO_HEIGHT;
+    const cv::Point center(
+        static_cast<int>(std::round(panoramaSeedDisplayCenter.x * scaleX)),
+        static_cast<int>(std::round(panoramaSeedDisplayCenter.y * scaleY))
+    );
+    const int radius = std::max(8, static_cast<int>(std::round(panoramaSeedDisplayRadius * std::max(scaleX, scaleY))));
+    cv::circle(frame, center, radius, cv::Scalar(255, 120, 0), 2);
+    cv::circle(frame, center, 5, cv::Scalar(0, 230, 255), cv::FILLED);
 }
 
 bool QtBroadcastWindow::openWriter(cv::VideoWriter& writer, const std::string& path) const {

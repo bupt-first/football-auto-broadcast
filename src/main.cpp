@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -384,6 +385,259 @@ int exportCurrentEditorClips(const std::string& inputPath) {
     std::cout << "Output video: " << CommonTool::finalVideoOutputPath("personal_highlight.mp4") << std::endl;
     return ok ? 0 : 1;
 }
+
+int debugBallDetection(
+    const std::string& inputPath,
+    int seedFrame,
+    double seedX,
+    double seedY,
+    double seedRadius
+) {
+    cv::VideoCapture capture(inputPath);
+    if (!capture.isOpened()) {
+        std::cerr << "Failed to open source video: " << inputPath << std::endl;
+        return 1;
+    }
+
+    double fps = capture.get(cv::CAP_PROP_FPS);
+    if (fps <= 1.0) {
+        fps = FPS;
+    }
+    const int width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+    if (width <= 0 || height <= 0) {
+        std::cerr << "Input video has invalid frame size." << std::endl;
+        return 1;
+    }
+
+    const std::filesystem::path outputDir(CommonTool::finalVideoOutputDir());
+    const std::filesystem::path sampleDir = outputDir / "ball_detection_samples";
+    std::filesystem::create_directories(sampleDir);
+    for (const auto& entry : std::filesystem::directory_iterator(sampleDir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".jpg") {
+            std::filesystem::remove(entry.path());
+        }
+    }
+
+    const std::string outputVideo = CommonTool::finalVideoOutputPath("ball_detection_debug.mp4");
+    cv::VideoWriter writer;
+    writer.open(outputVideo, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), fps, cv::Size(width, height));
+    if (!writer.isOpened()) {
+        std::cerr << "Failed to create debug video: " << outputVideo << std::endl;
+        return 1;
+    }
+
+    DetectionConfig config;
+    config.confidenceThreshold = 0.08;
+    config.ballCandidateConfidenceThreshold = 0.20;
+    config.confirmedBallConfidenceThreshold = 0.42;
+    config.ballGrassRejectThreshold = 0.50;
+    config.ballSaturationRejectThreshold = 0.36;
+    config.ballPredictionGate = std::max(55.0, seedRadius * 0.35);
+    config.minBallTrackHits = 2;
+    config.autoBallBootstrapHits = 3;
+
+    TargetDetectionManager detector;
+    detector.init(config);
+
+    cv::Mat frame;
+    int frameIndex = 0;
+    int framesWithBall = 0;
+    int framesWithTargets = 0;
+    double confidenceTotal = 0.0;
+    std::vector<cv::Point> ballTrail;
+    int trailMisses = 0;
+    bool hasSearchCenter = seedX >= 0.0 && seedY >= 0.0;
+    cv::Point searchCenter(
+        static_cast<int>(std::round(seedX)),
+        static_cast<int>(std::round(seedY))
+    );
+    cv::Mat ballTemplate;
+    bool templateReady = false;
+    int templateMisses = 0;
+    const int templateSize = std::max(14, static_cast<int>(std::round(seedRadius * 0.16)));
+    const int sampleStep = std::max(1, static_cast<int>(std::round(fps * 2.0)));
+
+    while (capture.read(frame)) {
+        if (frame.empty()) {
+            ++frameIndex;
+            continue;
+        }
+
+        const double timestamp = frameIndex / fps;
+        if (hasSearchCenter && frameIndex == seedFrame) {
+            detector.reset();
+            detector.seedBallTrack(cv::Point2f(static_cast<float>(seedX), static_cast<float>(seedY)), timestamp, seedRadius);
+            ballTrail.clear();
+            trailMisses = 0;
+            const cv::Rect seedBox(
+                std::clamp(searchCenter.x - templateSize / 2, 0, std::max(0, frame.cols - templateSize)),
+                std::clamp(searchCenter.y - templateSize / 2, 0, std::max(0, frame.rows - templateSize)),
+                std::min(templateSize, frame.cols),
+                std::min(templateSize, frame.rows)
+            );
+            if (seedBox.width > 4 && seedBox.height > 4) {
+                cv::cvtColor(frame(seedBox), ballTemplate, cv::COLOR_BGR2GRAY);
+                templateReady = true;
+                templateMisses = 0;
+            }
+        }
+
+        std::vector<TargetInfo> targets;
+        if (!hasSearchCenter || frameIndex >= seedFrame) {
+            targets = detector.detect(frame, timestamp);
+        }
+        if (templateReady && frameIndex >= seedFrame) {
+            const int searchRadius = std::max(45, static_cast<int>(std::round(seedRadius * 0.35)));
+            const int left = std::clamp(searchCenter.x - searchRadius, 0, frame.cols - 1);
+            const int top = std::clamp(searchCenter.y - searchRadius, 0, frame.rows - 1);
+            const int right = std::clamp(searchCenter.x + searchRadius, 0, frame.cols - 1);
+            const int bottom = std::clamp(searchCenter.y + searchRadius, 0, frame.rows - 1);
+            const cv::Rect searchBox(left, top, std::max(1, right - left + 1), std::max(1, bottom - top + 1));
+
+            if (searchBox.width >= ballTemplate.cols && searchBox.height >= ballTemplate.rows) {
+                cv::Mat searchGray;
+                cv::cvtColor(frame(searchBox), searchGray, cv::COLOR_BGR2GRAY);
+                cv::Mat result;
+                cv::matchTemplate(searchGray, ballTemplate, result, cv::TM_CCOEFF_NORMED);
+
+                double minVal = 0.0;
+                double maxVal = 0.0;
+                cv::Point minLoc;
+                cv::Point maxLoc;
+                cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
+                if (maxVal >= 0.34) {
+                    searchCenter = cv::Point(
+                        searchBox.x + maxLoc.x + ballTemplate.cols / 2,
+                        searchBox.y + maxLoc.y + ballTemplate.rows / 2
+                    );
+                    templateMisses = 0;
+
+                    TargetInfo templateBall;
+                    templateBall.type = TargetType::BALL;
+                    templateBall.box = cv::Rect(
+                        searchCenter.x - ballTemplate.cols / 2,
+                        searchCenter.y - ballTemplate.rows / 2,
+                        ballTemplate.cols,
+                        ballTemplate.rows
+                    );
+                    templateBall.confidence = std::clamp(maxVal, 0.0, 1.0);
+                    templateBall.timestamp = timestamp;
+
+                    targets.erase(
+                        std::remove_if(targets.begin(), targets.end(), [](const TargetInfo& target) {
+                            return target.type == TargetType::BALL;
+                        }),
+                        targets.end()
+                    );
+                    targets.push_back(templateBall);
+                } else {
+                    ++templateMisses;
+                    if (templateMisses > FPS / 2) {
+                        targets.erase(
+                            std::remove_if(targets.begin(), targets.end(), [](const TargetInfo& target) {
+                                return target.type == TargetType::BALL;
+                            }),
+                            targets.end()
+                        );
+                    }
+                }
+            }
+        }
+        if (!targets.empty()) {
+            ++framesWithTargets;
+        }
+
+        cv::Mat annotated = frame.clone();
+        if (hasSearchCenter && frameIndex >= seedFrame) {
+            cv::circle(annotated, searchCenter, static_cast<int>(std::round(seedRadius)), cv::Scalar(255, 120, 0), 2);
+        }
+        bool hasBall = false;
+        for (const auto& target : targets) {
+            const cv::Rect box = target.box & cv::Rect(0, 0, annotated.cols, annotated.rows);
+            if (box.empty()) {
+                continue;
+            }
+
+            const bool isBall = target.type == TargetType::BALL;
+            const cv::Scalar color = isBall ? cv::Scalar(0, 230, 255) : cv::Scalar(80, 230, 120);
+            cv::rectangle(annotated, box, color, isBall ? 3 : 2);
+
+            std::ostringstream label;
+            label << CommonTool::targetType2Str(target.type) << " " << std::fixed << std::setprecision(2) << target.confidence;
+            cv::putText(
+                annotated,
+                label.str(),
+                cv::Point(box.x, std::max(22, box.y - 8)),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.65,
+                color,
+                2
+            );
+
+            if (isBall) {
+                hasBall = true;
+                confidenceTotal += target.confidence;
+                searchCenter = cv::Point(box.x + box.width / 2, box.y + box.height / 2);
+                ballTrail.push_back(searchCenter);
+                if (ballTrail.size() > static_cast<std::size_t>(FPS * 4)) {
+                    ballTrail.erase(ballTrail.begin());
+                }
+            }
+        }
+
+        if (hasBall) {
+            ++framesWithBall;
+            trailMisses = 0;
+        } else if (!ballTrail.empty()) {
+            ++trailMisses;
+            if (trailMisses > FPS / 2) {
+                ballTrail.clear();
+            }
+        }
+
+        for (std::size_t i = 1; i < ballTrail.size(); ++i) {
+            cv::line(annotated, ballTrail[i - 1], ballTrail[i], cv::Scalar(0, 180, 255), 2);
+        }
+
+        std::ostringstream status;
+        status << "ball trajectory debug | t=" << std::fixed << std::setprecision(2) << timestamp
+               << "s | targets=" << targets.size()
+               << " | ball=" << (hasBall ? "yes" : "no")
+               << " | seed=" << (hasSearchCenter ? "yes" : "no");
+        cv::rectangle(annotated, cv::Rect(16, 16, std::min(900, annotated.cols - 32), 52), cv::Scalar(0, 0, 0), cv::FILLED);
+        cv::putText(annotated, status.str(), cv::Point(32, 51), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(245, 245, 245), 2);
+
+        writer.write(annotated);
+
+        if (frameIndex % sampleStep == 0 || hasBall) {
+            std::ostringstream name;
+            name << "frame_" << std::setw(6) << std::setfill('0') << frameIndex << ".jpg";
+            cv::imwrite((sampleDir / name.str()).string(), annotated);
+        }
+
+        ++frameIndex;
+    }
+
+    writer.release();
+    const double ballRate = frameIndex > 0 ? static_cast<double>(framesWithBall) / frameIndex : 0.0;
+    const double avgConfidence = framesWithBall > 0 ? confidenceTotal / framesWithBall : 0.0;
+
+    std::cout << "Debug frames: " << frameIndex << std::endl;
+    std::cout << "Frames with any target: " << framesWithTargets << std::endl;
+    std::cout << "Frames with confirmed ball: " << framesWithBall << std::endl;
+    std::cout << "Confirmed ball rate: " << std::fixed << std::setprecision(3) << ballRate << std::endl;
+    std::cout << "Average ball confidence: " << std::fixed << std::setprecision(3) << avgConfidence << std::endl;
+    std::cout << "Debug video: " << outputVideo << std::endl;
+    std::cout << "Sample frames: " << sampleDir.string() << std::endl;
+    if (hasSearchCenter) {
+        std::cout << "Seed frame: " << seedFrame
+                  << " x=" << seedX
+                  << " y=" << seedY
+                  << " radius=" << seedRadius << std::endl;
+    }
+    return 0;
+}
 }
 
 int main(int argc, char* argv[]) {
@@ -407,6 +661,22 @@ int main(int argc, char* argv[]) {
 
     if (argc > 2 && std::string(argv[1]) == "--export-current-editor-clips") {
         return exportCurrentEditorClips(argv[2]);
+    }
+
+    if (argc > 2 && std::string(argv[1]) == "--debug-ball-detection") {
+        int seedFrame = 0;
+        double seedX = -1.0;
+        double seedY = -1.0;
+        double seedRadius = 160.0;
+        if (argc > 5) {
+            seedFrame = std::stoi(argv[3]);
+            seedX = std::stod(argv[4]);
+            seedY = std::stod(argv[5]);
+        }
+        if (argc > 6) {
+            seedRadius = std::stod(argv[6]);
+        }
+        return debugBallDetection(argv[2], seedFrame, seedX, seedY, seedRadius);
     }
 
     bool useLegacyUi = false;

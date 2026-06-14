@@ -16,9 +16,23 @@ struct DetectionConfig {
     double closePlayerDistance = 110.0;
     double ballCandidateConfidenceThreshold = 0.20;
     double confirmedBallConfidenceThreshold = 0.42;
-    double ballPredictionGate = 140.0;
+    double ballColorThreshold = 0.12;
+    double ballGrassRejectThreshold = 0.55;
+    double ballSkinRejectThreshold = 0.38;
+    double ballSaturationRejectThreshold = 0.42;
+    double ballPredictionGate = 85.0;
     double ballLostTimeout = 0.7;
+    double autoBallBootstrapGate = 48.0;
+    double autoBallBootstrapMinShift = 4.0;
+    double autoBallBootstrapMaxShift = 95.0;
+    double autoBallBootstrapMinAspect = 0.78;
+    double autoBallBootstrapMaxAspect = 1.42;
+    double autoBallBootstrapMaxAreaRatio = 0.70;
+    double autoBallBootstrapSideMarginRatio = 0.08;
+    double autoBallBootstrapTopRatio = 0.42;
+    double autoBallBootstrapBottomRatio = 0.76;
     int minBallTrackHits = 2;
+    int autoBallBootstrapHits = 3;
     int maxTargets = 12;
     bool detectShoot = true;
     bool detectSave = true;
@@ -36,6 +50,7 @@ public:
     std::vector<TargetInfo> detect(const cv::Mat& frame);
     std::vector<TargetInfo> detect(const cv::Mat& frame, double timestamp);
     HighlightInfo detectHighlight(const std::vector<TargetInfo>& targets, double timestamp);
+    void seedBallTrack(const cv::Point2f& center, double timestamp, double radius);
 
     void setConfig(const DetectionConfig& config);
     const DetectionConfig& getConfig() const;
@@ -61,8 +76,16 @@ private:
 
     cv::Mat preprocessGray(const cv::Mat& frame) const;
     double calculateMotionIntensity(const cv::Mat& diff) const;
+    double calculateBallColorScore(const cv::Mat& frame, const cv::Rect& box) const;
+    double calculateGrassColorScore(const cv::Mat& frame, const cv::Rect& box) const;
+    double calculateSkinColorScore(const cv::Mat& frame, const cv::Rect& box) const;
+    double calculateSaturatedColorScore(const cv::Mat& frame, const cv::Rect& box) const;
     std::vector<TargetInfo> refineTargets(const std::vector<TargetInfo>& rawTargets) const;
     std::vector<TargetInfo> applyBallTrajectoryGate(const std::vector<TargetInfo>& targets, double timestamp);
+    bool isLikelyPlayerHeadCandidate(const TargetInfo& candidate, const std::vector<TargetInfo>& players) const;
+    bool hasNearbyPlayerContext(const TargetInfo& candidate, const std::vector<TargetInfo>& players, double maxDistance) const;
+    bool isValidAutoBallBootstrapCandidate(const TargetInfo& candidate) const;
+    bool updateAutoBallBootstrap(const TargetInfo& candidate, const std::vector<TargetInfo>& players, double timestamp);
     void updateMotionHistory(const std::vector<TargetInfo>& targets, double timestamp);
 
     double calculateTargetVelocity(const TargetInfo& target, double timestamp) const;
@@ -92,6 +115,10 @@ private:
     double avgMotionEnergy = 0.0;
     std::vector<MotionHistory> ballMotionHistory;
     BallTrack ballTrack;
+    TargetInfo pendingBallCandidate;
+    cv::Point2f pendingBallStart;
+    int pendingBallHits = 0;
+    double pendingBallTimestamp = 0.0;
 };
 
 #endif

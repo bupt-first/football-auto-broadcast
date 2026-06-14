@@ -18,6 +18,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QWidget>
+#include <functional>
 #include <opencv2/videoio.hpp>
 
 class QCloseEvent;
@@ -31,9 +32,12 @@ public:
     void setZoomPercent(int value);
     void resetZoom();
     int zoomPercent() const;
+    void setFrameClickCallback(std::function<void(const cv::Point2f&)> callback);
 
 private:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    bool mapWidgetPointToFrame(const QPoint& point, cv::Point2f& framePoint) const;
     void updatePixmap();
 
     QLabel* titleLabel = nullptr;
@@ -42,7 +46,9 @@ private:
     QSlider* zoomSlider = nullptr;
     QPushButton* resetButton = nullptr;
     QImage currentImage;
+    QSize currentPixmapSize;
     int currentZoomPercent = 100;
+    std::function<void(const cv::Point2f&)> frameClickCallback;
 };
 
 enum class OperatorMode {
@@ -95,6 +101,8 @@ private:
     void drawStatus(cv::Mat& frame, const BroadcastDecision& decision, std::size_t faceCount) const;
     void writeRecordingFrames(const cv::Mat& panorama, const cv::Mat& closeup, const cv::Mat& broadcast);
     void updateStatusText(const BroadcastDecision& decision, const DualCameraFrame& frame);
+    void seedPanoramaBall(const cv::Point2f& normalizedPoint);
+    void drawPanoramaSeed(cv::Mat& frame) const;
     bool openWriter(cv::VideoWriter& writer, const std::string& path) const;
     void releaseWriters();
 
@@ -129,6 +137,11 @@ private:
     BroadcastDecision lastDecision;
     bool recording = false;
     double lastCloseupTriggerTime = -10.0;
+    double lastFrameTimestamp = 0.0;
+    cv::Size lastPanoramaFrameSize;
+    bool panoramaSeedActive = false;
+    cv::Point2f panoramaSeedDisplayCenter;
+    double panoramaSeedDisplayRadius = 180.0;
 
     cv::VideoWriter panoramaWriter;
     cv::VideoWriter closeupWriter;
