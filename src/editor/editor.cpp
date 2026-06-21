@@ -218,7 +218,7 @@ std::vector<HighlightEvent> VideoEditorManager::filterEvents(const std::vector<H
         if (event.endSec <= event.startSec) {
             continue;
         }
-        filtered.push_back(event);
+        filtered.push_back(enrichEvent(event));
     }
 
     std::sort(filtered.begin(), filtered.end(), [](const HighlightEvent& lhs, const HighlightEvent& rhs) {
@@ -235,6 +235,7 @@ std::vector<EDLClip> VideoEditorManager::generateClips(const std::vector<Highlig
     std::vector<EDLClip> clips;
 
     for (const auto& event : filtered) {
+        const EventScoreBreakdown score = scoreEventBreakdown(event);
         EDLClip clip;
         clip.sourceStartSec = std::max(0.0, event.startSec - editorConfig.preBufferSec);
         clip.sourceEndSec = event.endSec + editorConfig.postBufferSec;
@@ -243,20 +244,39 @@ std::vector<EDLClip> VideoEditorManager::generateClips(const std::vector<Highlig
         }
         clip.playerID = event.playerID;
         clip.eventType = event.eventType;
-        clip.highlightScore = scoreEvent(event);
+        clip.highlightScore = score.total;
+        clip.sourceCamera = event.sourceCamera.empty() ? "panorama" : event.sourceCamera;
+        clip.replayCamera = event.replayCamera.empty() ? clip.sourceCamera : event.replayCamera;
+        clip.selectionReason = event.selectionReason.empty() ? score.reason : event.selectionReason;
         clip.description = event.description.empty() ? eventTypeName(event.eventType) : event.description;
         clip.events.push_back(event);
 
         if (!clips.empty() && clip.sourceStartSec <= clips.back().sourceEndSec) {
             EDLClip& merged = clips.back();
+            const double overlapStart = std::max(merged.sourceStartSec, clip.sourceStartSec);
+            const double overlapEnd = std::min(merged.sourceEndSec, clip.sourceEndSec);
+            const double overlap = safeDuration(overlapStart, overlapEnd);
+            const double shorter = std::max(0.001, std::min(
+                safeDuration(merged.sourceStartSec, merged.sourceEndSec),
+                safeDuration(clip.sourceStartSec, clip.sourceEndSec)
+            ));
             merged.sourceEndSec = std::max(merged.sourceEndSec, clip.sourceEndSec);
             merged.highlightScore = std::max(merged.highlightScore, clip.highlightScore);
+            merged.redundancyScore = std::max(merged.redundancyScore, clamp01(overlap / shorter));
             if (!clip.description.empty() && merged.description.find(clip.description) == std::string::npos) {
                 merged.description += " / " + clip.description;
             }
+            if (!clip.selectionReason.empty() && merged.selectionReason.find(clip.selectionReason) == std::string::npos) {
+                if (!merged.selectionReason.empty()) {
+                    merged.selectionReason += " | ";
+                }
+                merged.selectionReason += clip.selectionReason;
+            }
             merged.events.insert(merged.events.end(), clip.events.begin(), clip.events.end());
-            if (clip.eventType == 1 || merged.eventType == 0) {
+            if (clip.highlightScore >= merged.highlightScore || clip.eventType == 1 || merged.eventType == 0) {
                 merged.eventType = clip.eventType;
+                merged.sourceCamera = clip.sourceCamera;
+                merged.replayCamera = clip.replayCamera;
             }
             if (merged.playerID < 0) {
                 merged.playerID = clip.playerID;
@@ -533,7 +553,7 @@ bool VideoEditorManager::writeReport(const std::string& path, const std::vector<
     out << "  },\n";
     out << "  \"workflow\": {\n";
     out << "    \"automatic_directing\": [\"detect targets\", \"estimate event threat\", \"choose panorama/follow/closeup\", \"record decision reason\"],\n";
-    out << "    \"full_match_editing\": [\"filterEvents\", \"generateClips\", \"buildEDL\", \"exportVideo\"],\n";
+    out << "    \"full_match_editing\": [\"filterEvents\", \"enrichEvent\", \"scoreEventBreakdown\", \"generateClips\", \"buildEDL\", \"exportVideo\"],\n";
     out << "    \"personal_editing\": [\"group by playerID or face tag\", \"reuse clip buffers\", \"add player name strip\", \"export player file\"]\n";
     out << "  },\n";
     out << "  \"evaluation_system\": {\n";
@@ -549,6 +569,36 @@ bool VideoEditorManager::writeReport(const std::string& path, const std::vector<
     out << "    \"target_visibility\": " << metrics.target_visibility << ",\n";
     out << "    \"replay_score\": " << metrics.replay_score << "\n";
     out << "  },\n";
+    out << "  \"event_timeline\": [\n";
+    for (std::size_t i = 0; i < reportEvents.size(); ++i) {
+        const auto event = enrichEvent(reportEvents[i]);
+        const EventScoreBreakdown score = scoreEventBreakdown(event);
+        out << "    {\"timestamp\": " << event.startSec
+            << ", \"duration\": " << safeDuration(event.startSec, event.endSec)
+            << ", \"event_type\": \"" << eventTypeName(event.eventType)
+            << "\", \"player_id\": " << event.playerID
+            << ", \"field_zone\": \"" << jsonEscape(event.fieldZone)
+            << "\", \"source_camera\": \"" << jsonEscape(event.sourceCamera)
+            << "\", \"replay_camera\": \"" << jsonEscape(event.replayCamera)
+            << "\", \"confidence\": " << event.confidence
+            << ", \"highlight_score\": " << score.total
+            << ", \"score_breakdown\": {"
+            << "\"event_type\": " << score.eventType
+            << ", \"field_zone\": " << score.fieldZone
+            << ", \"attacking_threat\": " << score.attackingThreat
+            << ", \"motion_intensity\": " << score.motionIntensity
+            << ", \"player_involvement\": " << score.playerInvolvement
+            << ", \"continuity\": " << score.continuity
+            << ", \"replay_value\": " << score.replayValue
+            << ", \"confidence\": " << score.confidence
+            << "}, \"selection_reason\": \"" << jsonEscape(event.selectionReason.empty() ? score.reason : event.selectionReason)
+            << "\", \"description\": \"" << jsonEscape(event.description) << "\"}";
+        if (i + 1 < reportEvents.size()) {
+            out << ",";
+        }
+        out << "\n";
+    }
+    out << "  ],\n";
     out << "  \"edl\": [\n";
     for (std::size_t i = 0; i < edl.size(); ++i) {
         const auto& clip = edl[i];
@@ -558,7 +608,11 @@ bool VideoEditorManager::writeReport(const std::string& path, const std::vector<
             << ", \"event_type\": \"" << eventTypeName(clip.eventType)
             << "\", \"player_id\": " << clip.playerID
             << ", \"highlight_score\": " << clip.highlightScore
-            << ", \"description\": \"" << jsonEscape(clip.description) << "\"}";
+            << ", \"redundancy_score\": " << clip.redundancyScore
+            << ", \"source_camera\": \"" << jsonEscape(clip.sourceCamera)
+            << "\", \"replay_camera\": \"" << jsonEscape(clip.replayCamera)
+            << "\", \"selection_reason\": \"" << jsonEscape(clip.selectionReason)
+            << "\", \"description\": \"" << jsonEscape(clip.description) << "\"}";
         if (i + 1 < edl.size()) {
             out << ",";
         }
@@ -577,6 +631,16 @@ bool VideoEditorManager::writeReport(const std::string& path, const std::vector<
         out << "\"start_time\": " << item.start_time << ", ";
         out << "\"end_time\": " << item.end_time << ", ";
         out << "\"score\": " << score.total << ", ";
+        out << "\"score_breakdown\": {"
+            << "\"event_type\": " << score.eventType
+            << ", \"field_zone\": " << score.fieldZone
+            << ", \"attacking_threat\": " << score.attackingThreat
+            << ", \"motion_intensity\": " << score.motionIntensity
+            << ", \"player_involvement\": " << score.playerInvolvement
+            << ", \"continuity\": " << score.continuity
+            << ", \"score_impact\": " << score.scoreImpact
+            << ", \"replay_value\": " << score.replayValue
+            << "}, ";
         out << "\"score_reason\": \"" << jsonEscape(score.reason) << "\", ";
         out << "\"broadcast_mode\": \"" << CommonTool::broadcastMode2Str(decision.mode) << "\", ";
         out << "\"broadcast_reason\": \"" << jsonEscape(decision.reason) << "\", ";
@@ -677,29 +741,33 @@ VideoEditorManager::MatchAwareScore VideoEditorManager::scoreHighlight(const Hig
 
     score.playerInvolvement = clamp01(playerCount / 8.0);
     score.attackingThreat = clamp01(0.45 * score.fieldZone + 0.35 * (ballCount > 0 ? 1.0 : 0.0) + 0.20 * score.playerInvolvement);
+    score.motionIntensity = clamp01((ballCount > 0 ? 0.55 : 0.20) + item.related_targets.size() / 14.0);
     score.continuity = clamp01(safeDuration(item.start_time, item.end_time) / 8.0);
     const double avgConfidence = item.related_targets.empty() ? 0.5 : confidenceSum / item.related_targets.size();
     score.replayValue = clamp01(0.45 * avgConfidence + 0.35 * score.attackingThreat + 0.20 * score.continuity);
     score.total = clamp01(
-        0.24 * score.eventType +
-        0.14 * score.fieldZone +
+        0.22 * score.eventType +
+        0.13 * score.fieldZone +
         0.18 * score.attackingThreat +
-        0.12 * score.playerInvolvement +
-        0.10 * score.continuity +
-        0.12 * score.scoreImpact +
-        0.10 * score.replayValue
+        0.11 * score.motionIntensity +
+        0.11 * score.playerInvolvement +
+        0.09 * score.continuity +
+        0.08 * score.scoreImpact +
+        0.08 * score.replayValue
     );
 
     std::ostringstream reason;
     reason << eventTypeName(highlightTypeCode(item.type))
            << ", zone=" << std::fixed << std::setprecision(2) << score.fieldZone
            << ", threat=" << score.attackingThreat
+           << ", motion=" << score.motionIntensity
            << ", involvement=" << score.playerInvolvement;
     score.reason = reason.str();
     return score;
 }
 
-double VideoEditorManager::scoreEvent(const HighlightEvent& event) const {
+VideoEditorManager::EventScoreBreakdown VideoEditorManager::scoreEventBreakdown(const HighlightEvent& event) const {
+    EventScoreBreakdown score;
     double typeScore = 0.4;
     switch (event.eventType) {
         case 1:
@@ -718,9 +786,95 @@ double VideoEditorManager::scoreEvent(const HighlightEvent& event) const {
             break;
     }
 
-    const double durationScore = clamp01(safeDuration(event.startSec, event.endSec) / 8.0);
-    const double personalScore = event.playerID >= 0 ? 1.0 : 0.55;
-    return clamp01(0.48 * typeScore + 0.25 * event.confidence + 0.17 * durationScore + 0.10 * personalScore);
+    score.eventType = typeScore;
+    score.fieldZone = clamp01(event.fieldZoneScore);
+    score.attackingThreat = clamp01(event.attackingThreatScore);
+    score.motionIntensity = clamp01(event.motionIntensityScore);
+    score.playerInvolvement = clamp01(event.playerInvolvementScore);
+    score.continuity = event.continuityScore > 0.0
+        ? clamp01(event.continuityScore)
+        : clamp01(safeDuration(event.startSec, event.endSec) / 8.0);
+    score.replayValue = clamp01(event.replayValueScore);
+    score.confidence = clamp01(event.confidence);
+    score.personal = event.playerID >= 0 ? 1.0 : 0.55;
+
+    score.total = clamp01(
+        0.24 * score.eventType +
+        0.14 * score.fieldZone +
+        0.17 * score.attackingThreat +
+        0.12 * score.motionIntensity +
+        0.10 * score.playerInvolvement +
+        0.08 * score.continuity +
+        0.08 * score.replayValue +
+        0.05 * score.confidence +
+        0.02 * score.personal
+    );
+
+    std::ostringstream reason;
+    reason << eventTypeName(event.eventType)
+           << " selected by score=" << std::fixed << std::setprecision(2) << score.total
+           << " type=" << score.eventType
+           << " zone=" << score.fieldZone
+           << " threat=" << score.attackingThreat
+           << " motion=" << score.motionIntensity
+           << " replay=" << score.replayValue;
+    score.reason = reason.str();
+    return score;
+}
+
+HighlightEvent VideoEditorManager::enrichEvent(const HighlightEvent& event) const {
+    HighlightEvent enriched = event;
+    const double duration = safeDuration(enriched.startSec, enriched.endSec);
+    const bool isScoringEvent = enriched.eventType == 1 || enriched.eventType == 2 || enriched.eventType == 5;
+
+    if (enriched.description.empty()) {
+        enriched.description = eventTypeName(enriched.eventType);
+    }
+    if (enriched.fieldZone == "unknown") {
+        enriched.fieldZone = isScoringEvent ? "attacking_third" : "middle_third";
+    }
+    if (enriched.sourceCamera.empty()) {
+        enriched.sourceCamera = "panorama";
+    }
+    if (enriched.replayCamera.empty()) {
+        enriched.replayCamera = isScoringEvent ? "auxiliary_or_virtual_follow" : enriched.sourceCamera;
+    }
+    if (enriched.fieldZoneScore <= 0.0) {
+        enriched.fieldZoneScore = isScoringEvent ? 0.72 : 0.42;
+    }
+    if (enriched.attackingThreatScore <= 0.0) {
+        enriched.attackingThreatScore = isScoringEvent ? 0.70 : 0.38;
+    }
+    if (enriched.motionIntensityScore <= 0.0) {
+        enriched.motionIntensityScore = clamp01(0.35 + duration / 10.0);
+    }
+    if (enriched.playerInvolvementScore <= 0.0) {
+        enriched.playerInvolvementScore = enriched.playerID >= 0 ? 0.88 : 0.50;
+    }
+    if (enriched.continuityScore <= 0.0) {
+        enriched.continuityScore = clamp01(duration / 8.0);
+    }
+    if (enriched.replayValueScore <= 0.0) {
+        enriched.replayValueScore = clamp01(
+            0.42 * enriched.attackingThreatScore +
+            0.26 * enriched.motionIntensityScore +
+            0.20 * enriched.confidence +
+            0.12 * enriched.continuityScore
+        );
+    }
+    if (enriched.involvedTargetCount <= 0) {
+        enriched.involvedTargetCount = enriched.playerID >= 0 ? 1 : 0;
+    }
+
+    const EventScoreBreakdown score = scoreEventBreakdown(enriched);
+    if (enriched.selectionReason.empty()) {
+        enriched.selectionReason = score.reason;
+    }
+    return enriched;
+}
+
+double VideoEditorManager::scoreEvent(const HighlightEvent& event) const {
+    return scoreEventBreakdown(enrichEvent(event)).total;
 }
 
 BroadcastDecision VideoEditorManager::decideCamera(const HighlightInfo& item) const {
@@ -743,12 +897,25 @@ BroadcastDecision VideoEditorManager::decideCamera(const HighlightInfo& item) co
 }
 
 HighlightEvent VideoEditorManager::toEvent(const HighlightInfo& item) const {
+    const MatchAwareScore score = scoreHighlight(item);
+    const BroadcastDecision decision = decideCamera(item);
     HighlightEvent event;
     event.eventType = highlightTypeCode(item.type);
     event.startSec = item.start_time;
     event.endSec = item.end_time;
     event.playerID = -1;
-    event.confidence = static_cast<float>(std::max(0.5, scoreHighlight(item).total));
+    event.confidence = static_cast<float>(std::max(0.5, score.total));
+    event.fieldZoneScore = score.fieldZone;
+    event.attackingThreatScore = score.attackingThreat;
+    event.motionIntensityScore = score.motionIntensity;
+    event.playerInvolvementScore = score.playerInvolvement;
+    event.continuityScore = score.continuity;
+    event.replayValueScore = score.replayValue;
+    event.involvedTargetCount = static_cast<int>(item.related_targets.size());
+    event.fieldZone = score.fieldZone > 0.62 ? "attacking_third" : "middle_or_defensive_third";
+    event.sourceCamera = decision.mode == BroadcastMode::CLOSEUP ? "auxiliary" : "panorama";
+    event.replayCamera = decision.mode == BroadcastMode::NORMAL ? "panorama" : "virtual_follow";
+    event.selectionReason = score.reason + " | " + decision.reason;
     event.description = CommonTool::highlightType2Str(item.type);
     return event;
 }

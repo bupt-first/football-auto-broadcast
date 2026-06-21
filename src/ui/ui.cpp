@@ -16,7 +16,7 @@ bool UIManager::initAllAutoCamera() {
     if (!initModules()) {
         return false;
     }
-    return vs.initAuto(1, 6);
+    return vs.initAuto(0, 6);
 }
 
 bool UIManager::initAllFromFile(const std::string& videoPath) {
@@ -101,14 +101,21 @@ bool UIManager::initModules() {
 
 void UIManager::drawTargets(cv::Mat& frame) {
     for (const auto& target : targets) {
+        const cv::Rect box = target.box & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (box.empty()) {
+            continue;
+        }
         const cv::Scalar color = target.type == TargetType::BALL
             ? cv::Scalar(0, 220, 255)
             : cv::Scalar(0, 180, 0);
-        cv::rectangle(frame, target.box, color, 2);
+        cv::rectangle(frame, box, color, 2);
+        const std::string label = target.semanticLabel.empty()
+            ? CommonTool::targetType2Str(target.type)
+            : target.semanticLabel;
         cv::putText(
             frame,
-            CommonTool::targetType2Str(target.type),
-            cv::Point(target.box.x, std::max(16, target.box.y - 6)),
+            label,
+            cv::Point(box.x, std::max(16, box.y - 6)),
             cv::FONT_HERSHEY_SIMPLEX,
             0.5,
             color,
@@ -119,11 +126,15 @@ void UIManager::drawTargets(cv::Mat& frame) {
 
 void UIManager::drawFaces(cv::Mat& frame) {
     for (const auto& item : faces) {
-        cv::rectangle(frame, item.face_box, cv::Scalar(255, 160, 0), 2);
+        const cv::Rect box = item.face_box & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (box.empty()) {
+            continue;
+        }
+        cv::rectangle(frame, box, cv::Scalar(255, 160, 0), 2);
         cv::putText(
             frame,
             CommonTool::emotionType2Str(item.emotion),
-            cv::Point(item.face_box.x, std::max(16, item.face_box.y - 6)),
+            cv::Point(box.x, std::max(16, box.y - 6)),
             cv::FONT_HERSHEY_SIMPLEX,
             0.5,
             cv::Scalar(255, 160, 0),

@@ -9,7 +9,7 @@ This repository now contains a runnable project skeleton:
 - `video_stream`: opens a camera or video file and reads frames.
 - `detection`: uses frame-difference motion detection as a placeholder for ball/player detection.
 - `face_capture`: optionally uses OpenCV Haar cascade face detection when the XML model is available.
-- `editor`: stores highlight metadata and exports `highlight.mp4` plus a JSON report.
+- `editor`: stores a unified event timeline, scores highlights with explainable football factors, builds an EDL, exports `highlight.mp4`, and writes JSON reports.
 - `ui`: provides a Qt director console for dual-camera automatic broadcasting. The legacy OpenCV preview is still available with `--legacy-ui`.
 
 The detection, emotion, RTMP push, and real video highlight cutting logic are intentionally simple placeholders. They are ready for team members to replace with stronger algorithms.
@@ -34,7 +34,7 @@ The detection, emotion, RTMP push, and real video highlight cutting logic are in
 4. Highlight generation and metrics
    - Improve `src/editor`.
    - Export real highlight videos.
-   - Add global/personal highlight scoring and JSON report fields.
+   - Add global/personal highlight scoring, redundancy control, EDL data, and JSON report fields.
 
 5. Hardware, documentation, and testing
    - Prepare camera setup, tripod/fixed-position plan, test videos, screenshots, and PPT materials.
@@ -122,7 +122,7 @@ During recording:
 - Automatic motion highlights are also captured.
 - On exit, the program writes `highlight.mp4` when at least one highlight has enough captured frames.
 - The generated highlight video includes detection boxes, a title card, a pulsing border, sharpening, and a replay label.
-- The program also writes `personal_highlight_report.json` and evaluation metrics in the report.
+- The program also writes `personal_highlight_report.json`, an `event_timeline`, EDL entries, explainable highlight score breakdowns, and evaluation metrics in the report.
 
 ## Documents
 

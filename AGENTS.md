@@ -14,6 +14,8 @@ The project must address the football automatic broadcasting assignment requirem
 ## Scope And Constraints
 
 - The implementation language is C++.
+- The core deliverable software and assignment-facing implementation should remain C++.
+- Other languages may be used when useful during development, testing, model conversion, data preparation, document generation, automation, or other supporting workflows, as long as they do not replace the core C++ implementation.
 - The solution should focus on football match automatic broadcasting and highlight generation.
 - The design should cover both system architecture and practical hardware/software integration.
 - Documentation should make the comparison, scheme design, evaluation indicators, hardware choices, and implementation plan clear enough for assignment review.

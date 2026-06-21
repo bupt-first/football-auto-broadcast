@@ -14,6 +14,17 @@ struct HighlightEvent {
     double endSec = 0.0;
     int playerID = -1;
     float confidence = 1.0f;
+    double fieldZoneScore = 0.0;
+    double attackingThreatScore = 0.0;
+    double motionIntensityScore = 0.0;
+    double playerInvolvementScore = 0.0;
+    double continuityScore = 0.0;
+    double replayValueScore = 0.0;
+    int involvedTargetCount = 0;
+    std::string fieldZone = "unknown";
+    std::string sourceCamera = "panorama";
+    std::string replayCamera = "panorama";
+    std::string selectionReason;
     std::string description;
 };
 
@@ -52,6 +63,10 @@ struct EDLClip {
     int playerID = -1;
     int eventType = 0;
     double highlightScore = 0.0;
+    double redundancyScore = 0.0;
+    std::string sourceCamera = "panorama";
+    std::string replayCamera = "panorama";
+    std::string selectionReason;
     std::string description;
     std::vector<HighlightEvent> events;
 };
@@ -119,6 +134,7 @@ private:
         double eventType = 0.0;
         double fieldZone = 0.0;
         double attackingThreat = 0.0;
+        double motionIntensity = 0.0;
         double playerInvolvement = 0.0;
         double continuity = 0.0;
         double scoreImpact = 0.0;
@@ -127,9 +143,25 @@ private:
         std::string reason;
     };
 
+    struct EventScoreBreakdown {
+        double eventType = 0.0;
+        double fieldZone = 0.0;
+        double attackingThreat = 0.0;
+        double motionIntensity = 0.0;
+        double playerInvolvement = 0.0;
+        double continuity = 0.0;
+        double replayValue = 0.0;
+        double confidence = 0.0;
+        double personal = 0.0;
+        double total = 0.0;
+        std::string reason;
+    };
+
     bool writeReport(const std::string& path, const std::vector<HighlightInfo>& items);
     EvaluationMetrics evaluate(const std::vector<HighlightInfo>& items) const;
     MatchAwareScore scoreHighlight(const HighlightInfo& item) const;
+    EventScoreBreakdown scoreEventBreakdown(const HighlightEvent& event) const;
+    HighlightEvent enrichEvent(const HighlightEvent& event) const;
     double scoreEvent(const HighlightEvent& event) const;
     BroadcastDecision decideCamera(const HighlightInfo& item) const;
     HighlightEvent toEvent(const HighlightInfo& item) const;

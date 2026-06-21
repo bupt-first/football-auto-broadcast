@@ -87,6 +87,8 @@ if(EXISTS ${FFmpeg_DIR}/lib/avcodec.lib)
 endif()
 
 if(WIN32)
+    target_link_libraries(${PROJECT_NAME} strmiids ole32 oleaut32)
+
     if(DEFINED OpenCV_BIN_DIR)
         file(GLOB OpenCV_DLL ${OpenCV_BIN_DIR}/*.dll)
         file(COPY ${OpenCV_DLL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
