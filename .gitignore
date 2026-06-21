@@ -41,6 +41,9 @@ docx_render_check/
 
 # Runtime generated media and reports
 *_record.mp4
+ball_detection_debug*.mp4
 highlight.mp4
 highlight_report.json
 personal_highlight_report.json
+personal_highlight.mp4
+lab_report_output/

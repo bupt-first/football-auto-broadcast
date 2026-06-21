@@ -42,6 +42,9 @@ The assignment asks the team to compare existing football automatic broadcasting
 - Added manual event marking to avoid missing key moments during field recording.
 - Added full-match and personal highlight reports.
 - Added JSON evaluation metrics and scheme description.
+- Added a unified `event_timeline` and EDL-style editing workflow inspired by public football-video analysis projects.
+- Added explainable highlight score fields: event type, field zone, attacking threat, motion intensity, player involvement, continuity, confidence, and replay value.
+- Added overlap merging and redundancy scoring so adjacent high-motion events become cleaner highlight clips instead of repeated fragments.
 
 ## Next technical improvements
 
@@ -53,6 +56,7 @@ The assignment asks the team to compare existing football automatic broadcasting
    - Shot: ball moves quickly toward goal area.
    - Save: goalkeeper overlaps ball trajectory near goal.
    - Goal: ball enters detected goal area and crowd/player reaction rises.
+   - Each detected event should fill the same timeline fields used by the editor, so later algorithm upgrades do not require a new export pipeline.
 
 3. Improve personal highlights.
    - Add manual player selection in the first frame.

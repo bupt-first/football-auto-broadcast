@@ -4,10 +4,100 @@
 #include <cmath>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 #include <opencv2/imgproc.hpp>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dshow.h>
+#endif
+
 namespace {
+#ifdef _WIN32
+std::string wideToUtf8(const wchar_t* value) {
+    if (value == nullptr) {
+        return {};
+    }
+
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1) {
+        return {};
+    }
+
+    std::string output(static_cast<std::size_t>(size - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value, -1, output.data(), size, nullptr, nullptr);
+    return output;
+}
+
+std::vector<std::string> enumerateDirectShowCameraNames() {
+    std::vector<std::string> names;
+    const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool initializedHere = SUCCEEDED(initResult);
+    if (FAILED(initResult) && initResult != RPC_E_CHANGED_MODE) {
+        return names;
+    }
+
+    ICreateDevEnum* deviceEnum = nullptr;
+    IEnumMoniker* enumMoniker = nullptr;
+    HRESULT hr = CoCreateInstance(
+        CLSID_SystemDeviceEnum,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_ICreateDevEnum,
+        reinterpret_cast<void**>(&deviceEnum)
+    );
+    if (SUCCEEDED(hr)) {
+        hr = deviceEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &enumMoniker, 0);
+    }
+
+    if (hr == S_OK && enumMoniker != nullptr) {
+        IMoniker* moniker = nullptr;
+        ULONG fetched = 0;
+        while (enumMoniker->Next(1, &moniker, &fetched) == S_OK) {
+            IPropertyBag* propertyBag = nullptr;
+            if (SUCCEEDED(moniker->BindToStorage(nullptr, nullptr, IID_IPropertyBag, reinterpret_cast<void**>(&propertyBag)))) {
+                VARIANT value;
+                VariantInit(&value);
+                if (SUCCEEDED(propertyBag->Read(L"FriendlyName", &value, nullptr)) && value.vt == VT_BSTR) {
+                    names.push_back(wideToUtf8(value.bstrVal));
+                }
+                VariantClear(&value);
+                propertyBag->Release();
+            }
+            moniker->Release();
+        }
+    }
+
+    if (enumMoniker != nullptr) {
+        enumMoniker->Release();
+    }
+    if (deviceEnum != nullptr) {
+        deviceEnum->Release();
+    }
+    if (initializedHere) {
+        CoUninitialize();
+    }
+    return names;
+}
+
+int directShowCameraIndexByFixedName(const std::string& deviceName) {
+    const std::vector<std::string> names = enumerateDirectShowCameraNames();
+    std::cout << "DirectShow camera devices:" << std::endl;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        std::cout << "  [" << i << "] " << names[i] << std::endl;
+        if (names[i] == deviceName) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+#endif
+
 cv::Point2f averageHistory(const std::deque<cv::Point2f>& history) {
     if (history.empty()) {
         return cv::Point2f(0.0f, 0.0f);
@@ -157,12 +247,13 @@ bool DualVideoStreamManager::init(int panoramaCameraIndex, int closeupCameraInde
     release();
     selectedPanoramaIndex = -1;
     selectedCloseupIndex = -1;
+    selectedPanoramaSourceName = "未连接";
+    selectedCloseupSourceName = "未连接";
     currentMode = BroadcastMode::NORMAL;
 
     const bool panoramaReady = panoramaCameraIndex >= 0
         ? openByIndex(panoramaCap, panoramaCameraIndex, CameraRole::PANORAMA)
-        : openByName(panoramaCap, "UGREEN Camera 1080P", CameraRole::PANORAMA) ||
-              openFirstVisible(panoramaCap, 1, 8, -1, CameraRole::PANORAMA, selectedPanoramaIndex);
+        : openByName(panoramaCap, "UGREEN Camera 1080P", CameraRole::PANORAMA);
 
     if (!panoramaReady) {
         std::cerr << "Failed to open panorama camera. Expected device: UGREEN Camera 1080P." << std::endl;
@@ -172,12 +263,12 @@ bool DualVideoStreamManager::init(int panoramaCameraIndex, int closeupCameraInde
 
     if (panoramaCameraIndex >= 0) {
         selectedPanoramaIndex = panoramaCameraIndex;
+        selectedPanoramaSourceName = "camera index " + std::to_string(panoramaCameraIndex);
     }
 
     const bool closeupReady = closeupCameraIndex >= 0
         ? openByIndex(closeupCap, closeupCameraIndex, CameraRole::CLOSEUP)
-        : openByName(closeupCap, "UVC Camera", CameraRole::CLOSEUP) ||
-              openFirstVisible(closeupCap, 1, 8, selectedPanoramaIndex, CameraRole::CLOSEUP, selectedCloseupIndex);
+        : openByName(closeupCap, "UVC Camera", CameraRole::CLOSEUP);
 
     if (!closeupReady) {
         std::cerr << "Failed to open close-up camera. Expected device: UVC Camera." << std::endl;
@@ -187,10 +278,11 @@ bool DualVideoStreamManager::init(int panoramaCameraIndex, int closeupCameraInde
 
     if (closeupCameraIndex >= 0) {
         selectedCloseupIndex = closeupCameraIndex;
+        selectedCloseupSourceName = "camera index " + std::to_string(closeupCameraIndex);
     }
 
-    std::cout << "Dual camera input ready. panorama_index=" << selectedPanoramaIndex
-              << " closeup_index=" << selectedCloseupIndex << std::endl;
+    std::cout << "Dual camera input ready. panorama=" << selectedPanoramaSourceName
+              << " closeup=" << selectedCloseupSourceName << std::endl;
     return true;
 }
 
@@ -229,6 +321,14 @@ int DualVideoStreamManager::panoramaIndex() const {
 
 int DualVideoStreamManager::closeupIndex() const {
     return selectedCloseupIndex;
+}
+
+std::string DualVideoStreamManager::panoramaSourceName() const {
+    return selectedPanoramaSourceName;
+}
+
+std::string DualVideoStreamManager::closeupSourceName() const {
+    return selectedCloseupSourceName;
 }
 
 void DualVideoStreamManager::release() {
@@ -280,10 +380,36 @@ bool DualVideoStreamManager::openByName(cv::VideoCapture& capture, const std::st
     const std::string roleName = CommonTool::cameraRole2Str(role);
 
     std::cout << "Trying " << roleName << " camera by device name: " << deviceName << std::endl;
-    if (!capture.open(directShowName, cv::CAP_FFMPEG) && !capture.open(deviceName, cv::CAP_DSHOW)) {
-        std::cout << "Device-name open failed for " << deviceName << ". Falling back to camera indexes." << std::endl;
+    if (!capture.open(directShowName, cv::CAP_DSHOW) && !capture.open(deviceName, cv::CAP_DSHOW)) {
+#ifdef _WIN32
+        std::cout << "Fixed device-name open failed for " << deviceName
+                  << ". Resolving the fixed name through DirectShow enumeration." << std::endl;
+        const int fixedIndex = directShowCameraIndexByFixedName(deviceName);
+        if (fixedIndex < 0) {
+            std::cout << "DirectShow fixed-name lookup failed for " << deviceName << "." << std::endl;
+            capture.release();
+            return false;
+        }
+
+        std::cout << "Resolved " << deviceName << " to DirectShow camera index " << fixedIndex << "." << std::endl;
+        if (!openByIndex(capture, fixedIndex, role)) {
+            capture.release();
+            return false;
+        }
+
+        if (role == CameraRole::PANORAMA) {
+            selectedPanoramaIndex = fixedIndex;
+            selectedPanoramaSourceName = deviceName;
+        } else {
+            selectedCloseupIndex = fixedIndex;
+            selectedCloseupSourceName = deviceName;
+        }
+        return true;
+#else
+        std::cout << "Fixed device-name open failed for " << deviceName << "." << std::endl;
         capture.release();
         return false;
+#endif
     }
 
     if (!configureCapture(capture, role)) {
@@ -293,9 +419,15 @@ bool DualVideoStreamManager::openByName(cv::VideoCapture& capture, const std::st
 
     if (!hasVisibleFrame(capture)) {
         std::cout << "Device-name open produced no visible frames for " << deviceName
-                  << ". Falling back to camera indexes." << std::endl;
+                  << "." << std::endl;
         capture.release();
         return false;
+    }
+
+    if (role == CameraRole::PANORAMA) {
+        selectedPanoramaSourceName = deviceName;
+    } else {
+        selectedCloseupSourceName = deviceName;
     }
 
     std::cout << "Opened " << roleName << " camera by name: " << deviceName << std::endl;
@@ -327,6 +459,11 @@ bool DualVideoStreamManager::openFirstVisible(
 
         capture = std::move(candidate);
         selectedIndex = index;
+        if (role == CameraRole::PANORAMA) {
+            selectedPanoramaSourceName = "camera index " + std::to_string(index);
+        } else {
+            selectedCloseupSourceName = "camera index " + std::to_string(index);
+        }
         return true;
     }
 

@@ -6,6 +6,7 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <string>
 
 class VideoStreamManager {
 public:
@@ -35,6 +36,8 @@ public:
     void setMode(BroadcastMode mode);
     int panoramaIndex() const;
     int closeupIndex() const;
+    std::string panoramaSourceName() const;
+    std::string closeupSourceName() const;
     void release();
 
 private:
@@ -56,6 +59,8 @@ private:
     BroadcastMode currentMode = BroadcastMode::NORMAL;
     int selectedPanoramaIndex = -1;
     int selectedCloseupIndex = -1;
+    std::string selectedPanoramaSourceName = "未连接";
+    std::string selectedCloseupSourceName = "未连接";
 };
 
 class FootballAutoBroadcastProcessor {

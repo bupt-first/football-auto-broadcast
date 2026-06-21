@@ -38,6 +38,10 @@ struct TargetInfo {
     cv::Rect box;
     double confidence = 0.0;
     double timestamp = 0.0;
+    int trackId = -1;
+    int classId = -1;
+    int teamId = -1;
+    std::string semanticLabel;
 };
 
 struct HighlightInfo {

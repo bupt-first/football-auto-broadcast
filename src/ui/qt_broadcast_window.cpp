@@ -18,7 +18,9 @@
 #include <QtGlobal>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <exception>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <opencv2/imgproc.hpp>
@@ -240,8 +242,8 @@ bool QtBroadcastWindow::initialize() {
     }
 
     statusLabel->setText(QString("双机位已就绪：全景机位 %1，辅助机位 %2")
-        .arg(streams.panoramaIndex())
-        .arg(streams.closeupIndex()));
+        .arg(QString::fromStdString(streams.panoramaSourceName()))
+        .arg(QString::fromStdString(streams.closeupSourceName())));
 
     frameTimer->start(std::max(1, 1000 / FPS));
     return true;
@@ -264,8 +266,8 @@ void QtBroadcastWindow::setupUi() {
     });
 
     broadcastPane = new VideoPane("16:9 自动导播输出", this);
-    panoramaPane = new VideoPane("全景机位", this);
-    closeupPane = new VideoPane("辅助机位", this);
+    panoramaPane = new VideoPane("全景机位 · UGREEN Camera 1080P", this);
+    closeupPane = new VideoPane("辅助机位 · UVC Camera", this);
     panoramaPane->setFrameClickCallback([this](const cv::Point2f& point) {
         seedPanoramaBall(point);
     });
@@ -315,35 +317,34 @@ void QtBroadcastWindow::setupUi() {
     clockLabel->setObjectName("clockLabel");
     clockLabel->setAlignment(Qt::AlignCenter);
 
-    auto* brandTitle = new QLabel("校园足球自动转播系统", this);
+    auto* brandTitle = new QLabel("校园足球自动转播", this);
     brandTitle->setObjectName("brandTitle");
-    auto* brandSubtitle = new QLabel("双固定机位 · 软件跟拍 · 全场高光与个人集锦", this);
+    auto* brandSubtitle = new QLabel("双固定机位 · 软件跟拍 · 全场/个人高光", this);
     brandSubtitle->setObjectName("brandSubtitle");
 
+    auto* brandCard = new QFrame(this);
+    brandCard->setObjectName("brandCard");
     auto* brandLayout = new QVBoxLayout();
-    brandLayout->setSpacing(2);
+    brandLayout->setContentsMargins(14, 8, 14, 8);
+    brandLayout->setSpacing(3);
     brandLayout->addWidget(brandTitle);
     brandLayout->addWidget(brandSubtitle);
+    brandCard->setLayout(brandLayout);
 
-    auto* topBar = new QHBoxLayout();
-    topBar->setContentsMargins(18, 12, 18, 8);
+    auto* topBarFrame = new QFrame(this);
+    topBarFrame->setObjectName("topBar");
+    auto* topBar = new QHBoxLayout(topBarFrame);
+    topBar->setContentsMargins(14, 14, 14, 0);
     topBar->setSpacing(16);
-    topBar->addLayout(brandLayout, 1);
+    topBar->addWidget(brandCard, 1);
     topBar->addWidget(scoreLabel);
     topBar->addWidget(clockLabel);
-
-    consoleTabs = new QTabWidget(this);
-    consoleTabs->setDocumentMode(true);
-    consoleTabs->addTab(createLiveDirectorTab(), "实时导播");
-    consoleTabs->addTab(createHighlightTab(false), "全场高光");
-    consoleTabs->addTab(createHighlightTab(true), "个人高光");
-    consoleTabs->addTab(createMetricsTab(), "效果评估");
 
     auto* root = new QVBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
-    root->addLayout(topBar);
-    root->addWidget(consoleTabs, 1);
+    root->addWidget(topBarFrame);
+    root->addWidget(createLiveDirectorTab(), 1);
 
     auto* central = new QWidget(this);
     central->setLayout(root);
@@ -354,6 +355,7 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
     auto* tab = new QWidget(this);
 
     auto* sideLayout = new QVBoxLayout();
+    sideLayout->setContentsMargins(0, 0, 0, 0);
     sideLayout->setSpacing(12);
     sideLayout->addWidget(panoramaPane, 1);
     sideLayout->addWidget(closeupPane, 1);
@@ -377,42 +379,35 @@ QWidget* QtBroadcastWindow::createLiveDirectorTab() {
     timelineLayout->addStretch(1);
     sideLayout->addWidget(createInfoPanel("比赛时间线", "实时关键事件", timelineContent), 1);
 
-    auto* modeContent = new QWidget(this);
-    auto* modeLayout = new QVBoxLayout(modeContent);
-    modeLayout->setContentsMargins(0, 0, 0, 0);
-    modeLayout->setSpacing(12);
-
-    auto* modeButtons = new QHBoxLayout();
-    modeButtons->setSpacing(10);
-    modeButtons->addWidget(autoModeButton);
-    modeButtons->addWidget(forcePanoramaButton);
-    modeButtons->addWidget(forceFollowButton);
-    modeButtons->addWidget(replayButton);
-    modeButtons->addWidget(recordButton);
-    modeLayout->addLayout(modeButtons);
-
     decisionLabel = new QLabel("当前镜头状态：自动导播中 · 等待比赛画面输入", this);
     decisionLabel->setObjectName("decisionLabel");
     decisionLabel->setWordWrap(true);
-    modeLayout->addWidget(decisionLabel);
 
-    auto* bottomLayout = new QHBoxLayout();
-    bottomLayout->setSpacing(0);
-    bottomLayout->addWidget(createInfoPanel("一键操作", "直播台常用控制", modeContent), 1);
+    auto* bottomFrame = new QFrame(this);
+    bottomFrame->setObjectName("controlDeck");
+    auto* bottomLayout = new QHBoxLayout(bottomFrame);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->setSpacing(10);
+    bottomLayout->addWidget(autoModeButton);
+    bottomLayout->addWidget(forcePanoramaButton);
+    bottomLayout->addWidget(forceFollowButton);
+    bottomLayout->addWidget(replayButton);
+    bottomLayout->addWidget(recordButton);
 
     auto* grid = new QGridLayout(tab);
-    grid->setContentsMargins(16, 16, 16, 12);
-    grid->setHorizontalSpacing(16);
+    grid->setContentsMargins(14, 14, 14, 14);
+    grid->setHorizontalSpacing(14);
     grid->setVerticalSpacing(14);
     grid->addWidget(broadcastPane, 0, 0, 2, 1);
     grid->addLayout(sideLayout, 0, 1, 2, 1);
-    grid->addLayout(bottomLayout, 2, 0, 1, 2);
-    grid->addWidget(statusLabel, 3, 0, 1, 2);
+    grid->addWidget(bottomFrame, 2, 0, 1, 2);
     grid->setColumnStretch(0, 4);
     grid->setColumnStretch(1, 1);
+    grid->setColumnMinimumWidth(1, 320);
     grid->setRowStretch(0, 1);
     grid->setRowStretch(1, 1);
     grid->setRowStretch(2, 0);
+    grid->setRowMinimumHeight(2, 70);
     return tab;
 }
 
@@ -554,16 +549,19 @@ QListWidget* QtBroadcastWindow::createHighlightList(bool personal) {
 void QtBroadcastWindow::setupStyle() {
     setStyleSheet(
         "QMainWindow, QWidget { background: #07110f; color: #f3fff5; font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI'; }"
+        "QFrame#topBar { background: #07110f; border: 0; }"
+        "QFrame#brandCard { background: rgba(9, 24, 21, 232); border: 1px solid rgba(223, 247, 232, 38); border-radius: 8px; }"
+        "QFrame#controlDeck { background: transparent; border: 0; }"
         "QWidget#qt_scrollarea_viewport { background: #050c0a; }"
         "QScrollArea { background: #050c0a; border: 1px solid rgba(223, 247, 232, 44); border-radius: 8px; }"
         "QFrame#infoPanel, VideoPane { background: rgba(9, 24, 21, 232); border: 1px solid rgba(223, 247, 232, 38); border-radius: 8px; }"
         "QLabel#videoSurface { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e9652, stop:0.52 #19663a, stop:1 #8fbd58); color: rgba(243, 255, 245, 205); font-size: 17px; font-weight: 900; }"
         "QLabel#brandTitle { color: #f3fff5; font-size: 24px; font-weight: 900; }"
         "QLabel#brandSubtitle { color: #9db5a8; font-size: 13px; font-weight: 800; }"
-        "QLabel#scoreLabel { color: #06100d; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #9af15d); padding: 10px 22px; font-size: 20px; font-weight: 900; border-radius: 8px; }"
-        "QLabel#clockLabel { color: #dff7ff; background: rgba(88, 200, 255, 32); border: 1px solid rgba(88, 200, 255, 88); padding: 10px 16px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#scoreLabel { color: #06100d; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #9af15d); padding: 10px 22px; min-width: 190px; min-height: 42px; font-size: 20px; font-weight: 900; border-radius: 8px; }"
+        "QLabel#clockLabel { color: #dff7ff; background: rgba(88, 200, 255, 32); border: 1px solid rgba(88, 200, 255, 88); padding: 10px 16px; min-width: 170px; min-height: 42px; font-weight: 900; border-radius: 8px; }"
         "QLabel#paneTitle { color: #f3fff5; font-size: 15px; font-weight: 900; padding-bottom: 2px; }"
-        "QLabel#statusLabel { color: #9db5a8; padding: 8px 14px; border-top: 1px solid rgba(223, 247, 232, 24); }"
+        "QLabel#statusLabel { color: #9db5a8; padding: 8px 10px; border: 1px solid rgba(223, 247, 232, 24); border-radius: 8px; background: rgba(255, 255, 255, 12); }"
         "QLabel#decisionLabel { color: #e7ff63; background: rgba(231, 255, 99, 18); border: 1px solid rgba(231, 255, 99, 48); border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 900; }"
         "QLabel#panelTitle { color: #f3fff5; font-size: 16px; font-weight: 900; }"
         "QLabel#panelSubtitle { color: #9db5a8; font-size: 11px; font-weight: 800; }"
@@ -573,11 +571,11 @@ void QtBroadcastWindow::setupStyle() {
         "QLabel#metricCard { color: #e7ff63; background: rgba(255, 255, 255, 17); border: 1px solid rgba(223, 247, 232, 34); padding: 11px; font-weight: 900; border-radius: 8px; }"
         "QLabel#metricCard span { color: #9db5a8; font-size: 11px; font-weight: 800; }"
         "QLabel#metricCard strong { color: #e7ff63; font-size: 23px; }"
-        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #a7ee62); color: #06100d; border: 0; border-radius: 8px; padding: 13px 18px; font-size: 14px; font-weight: 900; }"
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e7ff63, stop:1 #a7ee62); color: #06100d; border: 0; border-radius: 8px; padding: 13px 18px; min-height: 46px; font-size: 14px; font-weight: 900; }"
         "QPushButton:hover { background: #f0ff8f; }"
         "QPushButton#recordButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff4d55, stop:1 #f07144); color: #ffffff; }"
         "QPushButton#secondaryButton { background: rgba(255, 255, 255, 24); color: #f3fff5; border: 1px solid rgba(223, 247, 232, 42); }"
-        "QRadioButton { spacing: 8px; padding: 13px 18px; color: #f3fff5; font-size: 14px; font-weight: 900; background: rgba(255, 255, 255, 18); border: 1px solid rgba(223, 247, 232, 34); border-radius: 8px; }"
+        "QRadioButton { spacing: 8px; padding: 13px 18px; color: #f3fff5; min-height: 46px; font-size: 14px; font-weight: 900; background: rgba(255, 255, 255, 18); border: 1px solid rgba(223, 247, 232, 34); border-radius: 8px; }"
         "QRadioButton::indicator { width: 0px; height: 0px; }"
         "QRadioButton:checked { color: #06100d; background: #e7ff63; border-color: #e7ff63; }"
         "QRadioButton#followModeButton:checked { background: #58c8ff; border-color: #58c8ff; }"
@@ -594,31 +592,49 @@ void QtBroadcastWindow::setupStyle() {
 }
 
 void QtBroadcastWindow::processFrame() {
-    const DualCameraFrame frame = streams.readFrame();
-    if (frame.panorama.empty() || frame.closeup.empty()) {
-        statusLabel->setText("Camera frame read failed. Check device connection.");
-        return;
+    try {
+        const DualCameraFrame frame = streams.readFrame();
+        if (frame.panorama.empty() || frame.closeup.empty()) {
+            statusLabel->setText("Camera frame read failed. Check device connection.");
+            return;
+        }
+        lastFrameTimestamp = frame.timestamp;
+        lastPanoramaFrameSize = frame.panorama.size();
+
+        const std::vector<TargetInfo> panoramaTargets = panoramaDetection.detect(frame.panorama, frame.timestamp);
+        const std::vector<TargetInfo> closeupTargets = closeupDetection.detect(frame.closeup, frame.timestamp);
+        const std::vector<FaceInfo> faces = faceCapture.capture(frame.closeup, frame.timestamp);
+        const BroadcastDecision decision = decideBroadcast(panoramaTargets, closeupTargets, faces, frame.timestamp);
+        lastDecision = decision;
+        streams.setMode(decision.mode);
+
+        const cv::Mat broadcastFrame = renderBroadcastFrame(frame, decision, panoramaTargets, closeupTargets, faces);
+
+        cv::Mat panoramaMonitor = normalizeFrame(frame.panorama);
+        drawPanoramaSeed(panoramaMonitor);
+        panoramaPane->setFrame(panoramaMonitor);
+        closeupPane->setFrame(normalizeFrame(frame.closeup));
+        broadcastPane->setFrame(broadcastFrame);
+
+        writeRecordingFrames(frame.panorama, frame.closeup, broadcastFrame);
+        updateStatusText(decision, frame);
+    } catch (const cv::Exception& error) {
+        if (frameTimer) {
+            frameTimer->stop();
+        }
+        if (statusLabel) {
+            statusLabel->setText(QString("OpenCV processing error: %1").arg(error.what()));
+        }
+        std::cerr << "OpenCV processing error in QtBroadcastWindow::processFrame: " << error.what() << std::endl;
+    } catch (const std::exception& error) {
+        if (frameTimer) {
+            frameTimer->stop();
+        }
+        if (statusLabel) {
+            statusLabel->setText(QString("Runtime processing error: %1").arg(error.what()));
+        }
+        std::cerr << "Runtime processing error in QtBroadcastWindow::processFrame: " << error.what() << std::endl;
     }
-    lastFrameTimestamp = frame.timestamp;
-    lastPanoramaFrameSize = frame.panorama.size();
-
-    const std::vector<TargetInfo> panoramaTargets = panoramaDetection.detect(frame.panorama, frame.timestamp);
-    const std::vector<TargetInfo> closeupTargets = closeupDetection.detect(frame.closeup, frame.timestamp);
-    const std::vector<FaceInfo> faces = faceCapture.capture(frame.closeup, frame.timestamp);
-    const BroadcastDecision decision = decideBroadcast(panoramaTargets, closeupTargets, faces, frame.timestamp);
-    lastDecision = decision;
-    streams.setMode(decision.mode);
-
-    const cv::Mat broadcastFrame = renderBroadcastFrame(frame, decision, panoramaTargets, closeupTargets, faces);
-
-    cv::Mat panoramaMonitor = normalizeFrame(frame.panorama);
-    drawPanoramaSeed(panoramaMonitor);
-    panoramaPane->setFrame(panoramaMonitor);
-    closeupPane->setFrame(normalizeFrame(frame.closeup));
-    broadcastPane->setFrame(broadcastFrame);
-
-    writeRecordingFrames(frame.panorama, frame.closeup, broadcastFrame);
-    updateStatusText(decision, frame);
 }
 
 void QtBroadcastWindow::startRecording() {
@@ -798,14 +814,24 @@ cv::Mat QtBroadcastWindow::normalizeFrame(const cv::Mat& frame) const {
 
 void QtBroadcastWindow::drawTargets(cv::Mat& frame, const std::vector<TargetInfo>& targets) const {
     for (const auto& target : targets) {
+        const cv::Rect box = target.box & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (box.empty()) {
+            continue;
+        }
         const cv::Scalar color = target.type == TargetType::BALL
             ? cv::Scalar(0, 230, 255)
             : cv::Scalar(90, 235, 130);
-        cv::rectangle(frame, target.box & cv::Rect(0, 0, frame.cols, frame.rows), color, 2);
+        cv::rectangle(frame, box, color, 2);
+        std::string label = target.semanticLabel.empty()
+            ? CommonTool::targetType2Str(target.type)
+            : target.semanticLabel;
+        if (target.trackId >= 0) {
+            label += " #" + std::to_string(target.trackId);
+        }
         cv::putText(
             frame,
-            CommonTool::targetType2Str(target.type),
-            cv::Point(target.box.x, std::max(18, target.box.y - 7)),
+            label,
+            cv::Point(box.x, std::max(18, box.y - 7)),
             cv::FONT_HERSHEY_SIMPLEX,
             0.55,
             color,
@@ -816,11 +842,15 @@ void QtBroadcastWindow::drawTargets(cv::Mat& frame, const std::vector<TargetInfo
 
 void QtBroadcastWindow::drawFaces(cv::Mat& frame, const std::vector<FaceInfo>& faces) const {
     for (const auto& face : faces) {
-        cv::rectangle(frame, face.face_box & cv::Rect(0, 0, frame.cols, frame.rows), cv::Scalar(255, 180, 60), 2);
+        const cv::Rect box = face.face_box & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (box.empty()) {
+            continue;
+        }
+        cv::rectangle(frame, box, cv::Scalar(255, 180, 60), 2);
         cv::putText(
             frame,
             CommonTool::emotionType2Str(face.emotion),
-            cv::Point(face.face_box.x, std::max(18, face.face_box.y - 7)),
+            cv::Point(box.x, std::max(18, box.y - 7)),
             cv::FONT_HERSHEY_SIMPLEX,
             0.55,
             cv::Scalar(255, 180, 60),

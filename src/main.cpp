@@ -190,13 +190,39 @@ std::vector<HighlightEvent> buildMotionEvents(const std::string& videoPath, doub
         event.startSec = std::max(0.0, sample.timeSec - 2.0);
         event.endSec = durationSec > 0.0 ? std::min(durationSec, sample.timeSec + 3.5) : sample.timeSec + 3.5;
         event.confidence = static_cast<float>(std::min(1.0, 0.55 + sample.intensity / std::max(1.0, threshold) * 0.25));
+        event.motionIntensityScore = std::min(1.0, sample.intensity / std::max(1.0, threshold * 1.8));
+        event.fieldZoneScore = event.eventType == 2 ? 0.68 : 0.42;
+        event.attackingThreatScore = std::min(1.0, 0.55 * event.fieldZoneScore + 0.45 * event.motionIntensityScore);
+        event.playerInvolvementScore = 0.56;
+        event.continuityScore = std::min(1.0, (event.endSec - event.startSec) / 8.0);
+        event.replayValueScore = std::min(1.0,
+            0.38 * event.attackingThreatScore +
+            0.30 * event.motionIntensityScore +
+            0.20 * event.confidence +
+            0.12 * event.continuityScore
+        );
+        event.fieldZone = event.eventType == 2 ? "motion_inferred_attacking_third" : "motion_inferred_middle_third";
+        event.sourceCamera = "panorama";
+        event.replayCamera = event.eventType == 2 ? "virtual_follow" : "panorama";
+        event.involvedTargetCount = 0;
+        event.selectionReason = event.eventType == 2
+            ? "strong motion peak selected as possible shot or fast attack"
+            : "above-threshold match motion selected for full-match context";
         event.description = event.eventType == 2 ? "strong football action" : "match motion highlight";
 
         if (!events.empty() && event.startSec <= events.back().endSec + 1.5) {
             events.back().endSec = std::max(events.back().endSec, event.endSec);
             events.back().confidence = std::max(events.back().confidence, event.confidence);
+            events.back().motionIntensityScore = std::max(events.back().motionIntensityScore, event.motionIntensityScore);
+            events.back().attackingThreatScore = std::max(events.back().attackingThreatScore, event.attackingThreatScore);
+            events.back().continuityScore = std::min(1.0, (events.back().endSec - events.back().startSec) / 8.0);
+            events.back().replayValueScore = std::max(events.back().replayValueScore, event.replayValueScore);
             if (event.eventType == 2) {
                 events.back().eventType = 2;
+                events.back().fieldZoneScore = event.fieldZoneScore;
+                events.back().fieldZone = event.fieldZone;
+                events.back().replayCamera = event.replayCamera;
+                events.back().selectionReason = event.selectionReason;
                 events.back().description = "strong football action";
             }
         } else {
@@ -210,6 +236,16 @@ std::vector<HighlightEvent> buildMotionEvents(const std::string& videoPath, doub
         fallback.startSec = 0.0;
         fallback.endSec = std::min(durationSec, 20.0);
         fallback.confidence = 0.6f;
+        fallback.fieldZoneScore = 0.35;
+        fallback.attackingThreatScore = 0.25;
+        fallback.motionIntensityScore = 0.20;
+        fallback.playerInvolvementScore = 0.35;
+        fallback.continuityScore = std::min(1.0, (fallback.endSec - fallback.startSec) / 8.0);
+        fallback.replayValueScore = 0.32;
+        fallback.fieldZone = "fallback_match_context";
+        fallback.sourceCamera = "panorama";
+        fallback.replayCamera = "panorama";
+        fallback.selectionReason = "fallback segment used because no motion peak passed the event threshold";
         fallback.description = "actual match video segment";
         events.push_back(fallback);
     }
@@ -257,6 +293,7 @@ int exportActualVideo(const std::string& inputPath, const std::string& outputNam
     }
 
     std::cout << "Motion events: " << events.size() << std::endl;
+    editor.exportGlobal("highlight_report.json");
 
     const bool exportThreeVideos = outputName.empty() || outputName == "all";
     if (!exportThreeVideos) {
@@ -274,6 +311,9 @@ int exportActualVideo(const std::string& inputPath, const std::string& outputNam
     std::vector<HighlightEvent> playerEvents = events;
     for (auto& event : playerEvents) {
         event.playerID = 11;
+        event.playerInvolvementScore = std::max(event.playerInvolvementScore, 0.90);
+        event.replayValueScore = std::max(event.replayValueScore, 0.72);
+        event.selectionReason += " | reused for No.11 personal highlight package";
         if (event.description.empty() || event.description == "match motion highlight") {
             event.description = "No.11 player involvement";
         }
@@ -366,6 +406,9 @@ int exportCurrentEditorClips(const std::string& inputPath) {
         ++frameIndex;
     }
 
+    editor.exportGlobal("highlight_report.json");
+    editor.exportPersonal("personal_highlight_report.json", "unknown");
+
     bool ok = true;
     config.titleText = "Automatic Broadcast Output";
     editor.setConfig(config);
@@ -434,6 +477,7 @@ int debugBallDetection(
     config.ballGrassRejectThreshold = 0.50;
     config.ballSaturationRejectThreshold = 0.36;
     config.ballPredictionGate = std::max(55.0, seedRadius * 0.35);
+    config.yoloInputSize = 640;
     config.minBallTrackHits = 2;
     config.autoBallBootstrapHits = 3;
 
@@ -564,7 +608,11 @@ int debugBallDetection(
             cv::rectangle(annotated, box, color, isBall ? 3 : 2);
 
             std::ostringstream label;
-            label << CommonTool::targetType2Str(target.type) << " " << std::fixed << std::setprecision(2) << target.confidence;
+            label << (target.semanticLabel.empty() ? CommonTool::targetType2Str(target.type) : target.semanticLabel)
+                  << " " << std::fixed << std::setprecision(2) << target.confidence;
+            if (target.trackId >= 0) {
+                label << " #" << target.trackId;
+            }
             cv::putText(
                 annotated,
                 label.str(),

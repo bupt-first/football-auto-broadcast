@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <opencv2/imgproc.hpp>
 
@@ -46,6 +47,23 @@ bool TargetDetectionManager::init(const DetectionConfig& newConfig) {
     previousTargets.clear();
     ballMotionHistory.clear();
     ballTrack = BallTrack();
+    YoloByteTrackDetector::Config yoloConfig;
+    yoloConfig.enabled = config.enableYoloByteTrack;
+    yoloConfig.modelPath = config.yoloModelPath;
+    yoloConfig.inputSize = cv::Size(
+        std::max(320, config.yoloInputSize),
+        std::max(320, config.yoloInputSize)
+    );
+    yoloConfig.confidenceThreshold = static_cast<float>(config.yoloConfidenceThreshold);
+    yoloConfig.highTrackThreshold = static_cast<float>(config.yoloHighTrackThreshold);
+    yoloConfig.nmsThreshold = static_cast<float>(config.yoloNmsThreshold);
+    yoloConfig.trackMatchThreshold = static_cast<float>(config.byteTrackMatchThreshold);
+    yoloConfig.maxLostFrames = config.byteTrackMaxLostFrames;
+    yoloConfig.ballClassId = config.yoloBallClassId;
+    yoloConfig.playerClassId = config.yoloPlayerClassId;
+    yoloConfig.goalkeeperClassId = config.yoloGoalkeeperClassId;
+    yoloConfig.refereeClassId = config.yoloRefereeClassId;
+    yoloByteTrackReady = yoloByteTrackDetector.init(yoloConfig);
     pendingBallCandidate = TargetInfo();
     pendingBallStart = cv::Point2f();
     pendingBallHits = 0;
@@ -81,6 +99,7 @@ void TargetDetectionManager::seedBallTrack(const cv::Point2f& center, double tim
     ballTrack.timestamp = timestamp;
     ballTrack.hits = std::max(1, config.minBallTrackHits);
     ballTrack.misses = 0;
+    ballTrack.manualSeeded = true;
     pendingBallCandidate = TargetInfo();
     pendingBallHits = 0;
     pendingBallTimestamp = 0.0;
@@ -212,6 +231,68 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame, dou
     const cv::Mat gray = preprocessGray(frame);
     lastFrameSize = frame.size();
 
+    std::vector<TargetInfo> yoloContextTargets;
+    auto mergeYoloContext = [this, &yoloContextTargets](std::vector<TargetInfo>& base) {
+        for (const auto& context : yoloContextTargets) {
+            if (context.type == TargetType::BALL || context.box.empty()) {
+                continue;
+            }
+
+            bool duplicate = false;
+            for (const auto& existing : base) {
+                if (existing.type != context.type) {
+                    continue;
+                }
+
+                const cv::Rect overlapRect = existing.box & context.box;
+                const double baseArea = std::min(rectArea(existing.box), rectArea(context.box));
+                const double overlap = baseArea > 0.0 ? rectArea(overlapRect) / baseArea : 0.0;
+                if (overlap > config.duplicateOverlapThreshold) {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (!duplicate) {
+                base.push_back(context);
+            }
+        }
+    };
+    auto sortAndLimit = [this](std::vector<TargetInfo>& items) {
+        std::sort(items.begin(), items.end(), [](const TargetInfo& lhs, const TargetInfo& rhs) {
+            if (lhs.type != rhs.type) {
+                return lhs.type == TargetType::BALL;
+            }
+            return lhs.confidence > rhs.confidence;
+        });
+        if (items.size() > static_cast<std::size_t>(runtimeMaxTargets)) {
+            items.resize(runtimeMaxTargets);
+        }
+    };
+
+    if (yoloByteTrackReady) {
+        targets = yoloByteTrackDetector.detectAndTrack(frame, timestamp);
+        if (!targets.empty()) {
+            const bool hasRawYoloBall = std::any_of(targets.begin(), targets.end(), [](const TargetInfo& target) {
+                return target.type == TargetType::BALL;
+            });
+            if (hasRawYoloBall) {
+                targets = applyBallTrajectoryGate(targets, timestamp);
+                const bool hasYoloBall = std::any_of(targets.begin(), targets.end(), [](const TargetInfo& target) {
+                    return target.type == TargetType::BALL;
+                });
+                if (hasYoloBall) {
+                    sortAndLimit(targets);
+                    updateMotionHistory(targets, timestamp);
+                    lastGray = gray.clone();
+                    return targets;
+                }
+            }
+            yoloContextTargets = targets;
+            targets.clear();
+        }
+    }
+
     if (lastGray.empty() || lastGray.size() != gray.size()) {
         lastGray = gray.clone();
         previousTargets.clear();
@@ -227,6 +308,8 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame, dou
         } else {
             ballTrack = BallTrack();
         }
+        mergeYoloContext(targets);
+        sortAndLimit(targets);
         return targets;
     }
 
@@ -318,16 +401,8 @@ std::vector<TargetInfo> TargetDetectionManager::detect(const cv::Mat& frame, dou
 
     targets = refineTargets(targets);
     targets = applyBallTrajectoryGate(targets, timestamp);
-    std::sort(targets.begin(), targets.end(), [](const TargetInfo& lhs, const TargetInfo& rhs) {
-        if (lhs.type != rhs.type) {
-            return lhs.type == TargetType::BALL;
-        }
-        return lhs.confidence > rhs.confidence;
-    });
-
-    if (targets.size() > static_cast<std::size_t>(runtimeMaxTargets)) {
-        targets.resize(runtimeMaxTargets);
-    }
+    mergeYoloContext(targets);
+    sortAndLimit(targets);
 
     updateMotionHistory(targets, timestamp);
     lastGray = gray.clone();
@@ -459,6 +534,22 @@ bool TargetDetectionManager::isValidAutoBallBootstrapCandidate(const TargetInfo&
     return areaRatio <= config.autoBallBootstrapMaxAreaRatio;
 }
 
+bool TargetDetectionManager::isInsideAutoBallTrackArea(const TargetInfo& candidate) const {
+    if (candidate.box.empty() || lastFrameSize.width <= 0 || lastFrameSize.height <= 0) {
+        return false;
+    }
+
+    const cv::Point2f center = rectCenter(candidate.box);
+    const double sideMargin = lastFrameSize.width * config.autoBallTrackSideMarginRatio;
+    if (center.x < sideMargin || center.x > lastFrameSize.width - sideMargin) {
+        return false;
+    }
+
+    const double upperLimit = lastFrameSize.height * config.autoBallTrackTopRatio;
+    const double lowerLimit = lastFrameSize.height * config.autoBallTrackBottomRatio;
+    return center.y >= upperLimit && center.y <= lowerLimit;
+}
+
 bool TargetDetectionManager::updateAutoBallBootstrap(
     const TargetInfo& candidate,
     const std::vector<TargetInfo>& players,
@@ -588,6 +679,13 @@ std::vector<TargetInfo> TargetDetectionManager::applyBallTrajectoryGate(
 
         TargetInfo confirmed = bestCandidate;
         confirmed.confidence = clampDouble(bestScore, 0.0, 1.0);
+        if (ballTrack.active && !ballTrack.manualSeeded && !isInsideAutoBallTrackArea(confirmed)) {
+            ballTrack = BallTrack();
+            pendingBallCandidate = TargetInfo();
+            pendingBallHits = 0;
+            pendingBallTimestamp = 0.0;
+            return filtered;
+        }
 
         const cv::Point2f center = rectCenter(confirmed.box);
         if (ballTrack.active) {
@@ -605,6 +703,9 @@ std::vector<TargetInfo> TargetDetectionManager::applyBallTrajectoryGate(
         ballTrack.timestamp = timestamp;
         ballTrack.hits = std::min(ballTrack.hits + 1, FPS * 2);
         ballTrack.misses = 0;
+        if (!ballTrack.manualSeeded) {
+            ballTrack.manualSeeded = false;
+        }
         pendingBallCandidate = TargetInfo();
         pendingBallHits = 0;
         pendingBallTimestamp = 0.0;
@@ -630,6 +731,10 @@ std::vector<TargetInfo> TargetDetectionManager::applyBallTrajectoryGate(
         ) & cv::Rect(0, 0, lastFrameSize.width, lastFrameSize.height);
         confirmed.confidence = ballTrack.confidence * 0.82;
         confirmed.timestamp = timestamp;
+        if (!ballTrack.manualSeeded && !isInsideAutoBallTrackArea(confirmed)) {
+            ballTrack = BallTrack();
+            return filtered;
+        }
         ++ballTrack.misses;
         ballTrack.position = clampedCenter;
         ballTrack.box = confirmed.box;

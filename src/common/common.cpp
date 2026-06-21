@@ -25,11 +25,7 @@ namespace CommonTool {
 #ifdef FINAL_OUTPUT_VIDEO_DIR
         std::filesystem::path outputDir(FINAL_OUTPUT_VIDEO_DIR);
 #else
-        const std::filesystem::path currentDir = std::filesystem::current_path();
-        std::filesystem::path outputDir = currentDir.filename() == "bin" &&
-                currentDir.parent_path().filename() == "build"
-            ? currentDir / "output video"
-            : currentDir / "build" / "bin" / "output video";
+        std::filesystem::path outputDir("D:/LUO/football-auto-broadcast/football-auto-broadcast/build/bin/output video");
 #endif
         std::error_code ec;
         std::filesystem::create_directories(outputDir, ec);

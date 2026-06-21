@@ -2,6 +2,7 @@
 #define DETECTION_H
 
 #include "common.h"
+#include "yolo_bytetrack_detector.h"
 
 struct DetectionConfig {
     double motionThreshold = 25.0;
@@ -31,6 +32,9 @@ struct DetectionConfig {
     double autoBallBootstrapSideMarginRatio = 0.08;
     double autoBallBootstrapTopRatio = 0.42;
     double autoBallBootstrapBottomRatio = 0.76;
+    double autoBallTrackTopRatio = 0.38;
+    double autoBallTrackBottomRatio = 0.84;
+    double autoBallTrackSideMarginRatio = 0.04;
     int minBallTrackHits = 2;
     int autoBallBootstrapHits = 3;
     int maxTargets = 12;
@@ -40,6 +44,18 @@ struct DetectionConfig {
     bool detectDribbling = true;
     bool detectHeader = true;
     bool detectTackle = true;
+    bool enableYoloByteTrack = true;
+    std::string yoloModelPath = "models/football_yolov8.onnx";
+    int yoloInputSize = 640;
+    double yoloConfidenceThreshold = 0.25;
+    double yoloHighTrackThreshold = 0.45;
+    double yoloNmsThreshold = 0.45;
+    double byteTrackMatchThreshold = 0.18;
+    int byteTrackMaxLostFrames = 20;
+    int yoloBallClassId = 32;
+    int yoloPlayerClassId = 0;
+    int yoloGoalkeeperClassId = -1;
+    int yoloRefereeClassId = -1;
 };
 
 class TargetDetectionManager {
@@ -72,6 +88,7 @@ private:
         double timestamp = 0.0;
         int hits = 0;
         int misses = 0;
+        bool manualSeeded = false;
     };
 
     cv::Mat preprocessGray(const cv::Mat& frame) const;
@@ -85,6 +102,7 @@ private:
     bool isLikelyPlayerHeadCandidate(const TargetInfo& candidate, const std::vector<TargetInfo>& players) const;
     bool hasNearbyPlayerContext(const TargetInfo& candidate, const std::vector<TargetInfo>& players, double maxDistance) const;
     bool isValidAutoBallBootstrapCandidate(const TargetInfo& candidate) const;
+    bool isInsideAutoBallTrackArea(const TargetInfo& candidate) const;
     bool updateAutoBallBootstrap(const TargetInfo& candidate, const std::vector<TargetInfo>& players, double timestamp);
     void updateMotionHistory(const std::vector<TargetInfo>& targets, double timestamp);
 
@@ -115,6 +133,8 @@ private:
     double avgMotionEnergy = 0.0;
     std::vector<MotionHistory> ballMotionHistory;
     BallTrack ballTrack;
+    YoloByteTrackDetector yoloByteTrackDetector;
+    bool yoloByteTrackReady = false;
     TargetInfo pendingBallCandidate;
     cv::Point2f pendingBallStart;
     int pendingBallHits = 0;
