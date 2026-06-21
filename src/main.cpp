@@ -23,6 +23,13 @@ struct MotionSample {
     double intensity = 0.0;
 };
 
+struct DebugBallSeed {
+    int frame = 0;
+    double x = -1.0;
+    double y = -1.0;
+    double radius = 160.0;
+};
+
 bool readVisibleFrame(cv::VideoCapture& cap, double& brightness, cv::Size& frameSize) {
     cv::Mat frame;
     brightness = 0.0;
@@ -431,10 +438,7 @@ int exportCurrentEditorClips(const std::string& inputPath) {
 
 int debugBallDetection(
     const std::string& inputPath,
-    int seedFrame,
-    double seedX,
-    double seedY,
-    double seedRadius
+    std::vector<DebugBallSeed> seeds
 ) {
     cv::VideoCapture capture(inputPath);
     if (!capture.isOpened()) {
@@ -470,13 +474,25 @@ int debugBallDetection(
         return 1;
     }
 
+    std::sort(seeds.begin(), seeds.end(), [](const DebugBallSeed& lhs, const DebugBallSeed& rhs) {
+        return lhs.frame < rhs.frame;
+    });
+    seeds.erase(
+        std::remove_if(seeds.begin(), seeds.end(), [](const DebugBallSeed& seed) {
+            return seed.frame < 0 || seed.x < 0.0 || seed.y < 0.0 || seed.radius <= 0.0;
+        }),
+        seeds.end()
+    );
+
+    const double firstSeedRadius = seeds.empty() ? 160.0 : seeds.front().radius;
+
     DetectionConfig config;
     config.confidenceThreshold = 0.08;
     config.ballCandidateConfidenceThreshold = 0.20;
     config.confirmedBallConfidenceThreshold = 0.42;
     config.ballGrassRejectThreshold = 0.50;
     config.ballSaturationRejectThreshold = 0.36;
-    config.ballPredictionGate = std::max(55.0, seedRadius * 0.35);
+    config.ballPredictionGate = std::max(55.0, firstSeedRadius * 0.35);
     config.yoloInputSize = 640;
     config.minBallTrackHits = 2;
     config.autoBallBootstrapHits = 3;
@@ -491,15 +507,14 @@ int debugBallDetection(
     double confidenceTotal = 0.0;
     std::vector<cv::Point> ballTrail;
     int trailMisses = 0;
-    bool hasSearchCenter = seedX >= 0.0 && seedY >= 0.0;
-    cv::Point searchCenter(
-        static_cast<int>(std::round(seedX)),
-        static_cast<int>(std::round(seedY))
-    );
+    bool trackingActive = false;
+    std::size_t nextSeedIndex = 0;
+    cv::Point searchCenter;
+    double activeSeedRadius = firstSeedRadius;
     cv::Mat ballTemplate;
     bool templateReady = false;
     int templateMisses = 0;
-    const int templateSize = std::max(14, static_cast<int>(std::round(seedRadius * 0.16)));
+    int templateSize = std::max(14, static_cast<int>(std::round(activeSeedRadius * 0.16)));
     const int sampleStep = std::max(1, static_cast<int>(std::round(fps * 2.0)));
 
     while (capture.read(frame)) {
@@ -509,11 +524,20 @@ int debugBallDetection(
         }
 
         const double timestamp = frameIndex / fps;
-        if (hasSearchCenter && frameIndex == seedFrame) {
+        while (nextSeedIndex < seeds.size() && seeds[nextSeedIndex].frame == frameIndex) {
+            const DebugBallSeed& seed = seeds[nextSeedIndex];
+            activeSeedRadius = seed.radius;
+            templateSize = std::max(14, static_cast<int>(std::round(activeSeedRadius * 0.16)));
+            searchCenter = cv::Point(
+                static_cast<int>(std::round(seed.x)),
+                static_cast<int>(std::round(seed.y))
+            );
+            trackingActive = true;
             detector.reset();
-            detector.seedBallTrack(cv::Point2f(static_cast<float>(seedX), static_cast<float>(seedY)), timestamp, seedRadius);
+            detector.seedBallTrack(cv::Point2f(static_cast<float>(seed.x), static_cast<float>(seed.y)), timestamp, activeSeedRadius);
             ballTrail.clear();
             trailMisses = 0;
+            templateReady = false;
             const cv::Rect seedBox(
                 std::clamp(searchCenter.x - templateSize / 2, 0, std::max(0, frame.cols - templateSize)),
                 std::clamp(searchCenter.y - templateSize / 2, 0, std::max(0, frame.rows - templateSize)),
@@ -525,14 +549,15 @@ int debugBallDetection(
                 templateReady = true;
                 templateMisses = 0;
             }
+            ++nextSeedIndex;
         }
 
         std::vector<TargetInfo> targets;
-        if (!hasSearchCenter || frameIndex >= seedFrame) {
+        if (seeds.empty() || trackingActive) {
             targets = detector.detect(frame, timestamp);
         }
-        if (templateReady && frameIndex >= seedFrame) {
-            const int searchRadius = std::max(45, static_cast<int>(std::round(seedRadius * 0.35)));
+        if (templateReady && trackingActive) {
+            const int searchRadius = std::max(45, static_cast<int>(std::round(activeSeedRadius * 0.35)));
             const int left = std::clamp(searchCenter.x - searchRadius, 0, frame.cols - 1);
             const int top = std::clamp(searchCenter.y - searchRadius, 0, frame.rows - 1);
             const int right = std::clamp(searchCenter.x + searchRadius, 0, frame.cols - 1);
@@ -593,8 +618,8 @@ int debugBallDetection(
         }
 
         cv::Mat annotated = frame.clone();
-        if (hasSearchCenter && frameIndex >= seedFrame) {
-            cv::circle(annotated, searchCenter, static_cast<int>(std::round(seedRadius)), cv::Scalar(255, 120, 0), 2);
+        if (trackingActive) {
+            cv::circle(annotated, searchCenter, static_cast<int>(std::round(activeSeedRadius)), cv::Scalar(255, 120, 0), 2);
         }
         bool hasBall = false;
         for (const auto& target : targets) {
@@ -652,7 +677,7 @@ int debugBallDetection(
         status << "ball trajectory debug | t=" << std::fixed << std::setprecision(2) << timestamp
                << "s | targets=" << targets.size()
                << " | ball=" << (hasBall ? "yes" : "no")
-               << " | seed=" << (hasSearchCenter ? "yes" : "no");
+               << " | seed=" << (trackingActive ? "yes" : "no");
         cv::rectangle(annotated, cv::Rect(16, 16, std::min(900, annotated.cols - 32), 52), cv::Scalar(0, 0, 0), cv::FILLED);
         cv::putText(annotated, status.str(), cv::Point(32, 51), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(245, 245, 245), 2);
 
@@ -678,11 +703,13 @@ int debugBallDetection(
     std::cout << "Average ball confidence: " << std::fixed << std::setprecision(3) << avgConfidence << std::endl;
     std::cout << "Debug video: " << outputVideo << std::endl;
     std::cout << "Sample frames: " << sampleDir.string() << std::endl;
-    if (hasSearchCenter) {
-        std::cout << "Seed frame: " << seedFrame
-                  << " x=" << seedX
-                  << " y=" << seedY
-                  << " radius=" << seedRadius << std::endl;
+    if (!seeds.empty()) {
+        for (const DebugBallSeed& seed : seeds) {
+            std::cout << "Seed frame: " << seed.frame
+                      << " x=" << seed.x
+                      << " y=" << seed.y
+                      << " radius=" << seed.radius << std::endl;
+        }
     }
     return 0;
 }
@@ -712,19 +739,25 @@ int main(int argc, char* argv[]) {
     }
 
     if (argc > 2 && std::string(argv[1]) == "--debug-ball-detection") {
-        int seedFrame = 0;
-        double seedX = -1.0;
-        double seedY = -1.0;
-        double seedRadius = 160.0;
-        if (argc > 5) {
-            seedFrame = std::stoi(argv[3]);
-            seedX = std::stod(argv[4]);
-            seedY = std::stod(argv[5]);
+        std::vector<DebugBallSeed> seeds;
+        const int seedArgCount = argc - 3;
+        if (seedArgCount > 0 && seedArgCount % 3 != 0 && seedArgCount % 4 != 0) {
+            std::cerr << "Seed arguments must be repeated as frame x y or frame x y radius." << std::endl;
+            return 1;
         }
-        if (argc > 6) {
-            seedRadius = std::stod(argv[6]);
+
+        const int seedStride = (seedArgCount > 0 && seedArgCount % 4 == 0) ? 4 : 3;
+        for (int argIndex = 3; argIndex < argc; argIndex += seedStride) {
+            DebugBallSeed seed;
+            seed.frame = std::stoi(argv[argIndex]);
+            seed.x = std::stod(argv[argIndex + 1]);
+            seed.y = std::stod(argv[argIndex + 2]);
+            if (seedStride == 4) {
+                seed.radius = std::stod(argv[argIndex + 3]);
+            }
+            seeds.push_back(seed);
         }
-        return debugBallDetection(argv[2], seedFrame, seedX, seedY, seedRadius);
+        return debugBallDetection(argv[2], seeds);
     }
 
     bool useLegacyUi = false;
