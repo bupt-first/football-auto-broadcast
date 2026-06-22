@@ -23,6 +23,12 @@ struct MotionSample {
     double intensity = 0.0;
 };
 
+struct MotionPeak {
+    double timeSec = 0.0;
+    double intensity = 0.0;
+    double baseline = 0.0;
+};
+
 bool readVisibleFrame(cv::VideoCapture& cap, double& brightness, cv::Size& frameSize) {
     cv::Mat frame;
     brightness = 0.0;
@@ -171,44 +177,144 @@ std::vector<HighlightEvent> buildMotionEvents(const std::string& videoPath, doub
         return events;
     }
 
-    const double mean = std::accumulate(samples.begin(), samples.end(), 0.0, [](double total, const MotionSample& item) {
-        return total + item.intensity;
-    }) / samples.size();
-    const double variance = std::accumulate(samples.begin(), samples.end(), 0.0, [mean](double total, const MotionSample& item) {
-        const double delta = item.intensity - mean;
-        return total + delta * delta;
-    }) / samples.size();
-    const double threshold = std::max(mean * 1.12, mean + std::sqrt(variance) * 0.35);
-
+    std::vector<double> rawValues;
+    rawValues.reserve(samples.size());
     for (const auto& sample : samples) {
-        if (sample.intensity < threshold) {
+        rawValues.push_back(sample.intensity);
+    }
+
+    const double mean = std::accumulate(rawValues.begin(), rawValues.end(), 0.0) /
+        std::max<std::size_t>(1, rawValues.size());
+    const double variance = std::accumulate(rawValues.begin(), rawValues.end(), 0.0, [mean](double total, double value) {
+        const double delta = value - mean;
+        return total + delta * delta;
+    }) / std::max<std::size_t>(1, rawValues.size());
+
+    auto percentile = [](std::vector<double> values, double ratio) {
+        if (values.empty()) {
+            return 0.0;
+        }
+
+        const std::size_t index = static_cast<std::size_t>(std::clamp(ratio, 0.0, 1.0) * (values.size() - 1));
+        std::nth_element(values.begin(), values.begin() + index, values.end());
+        return values[index];
+    };
+
+    std::vector<MotionSample> smoothed;
+    smoothed.reserve(samples.size());
+    const int smoothingRadius = 2;
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const std::size_t begin = i > smoothingRadius ? i - smoothingRadius : 0;
+        const std::size_t endIndex = std::min(samples.size() - 1, i + smoothingRadius);
+        double total = 0.0;
+        for (std::size_t j = begin; j <= endIndex; ++j) {
+            total += samples[j].intensity;
+        }
+        smoothed.push_back({samples[i].timeSec, total / static_cast<double>(endIndex - begin + 1)});
+    }
+
+    std::vector<double> smoothValues;
+    smoothValues.reserve(smoothed.size());
+    for (const auto& sample : smoothed) {
+        smoothValues.push_back(sample.intensity);
+    }
+
+    const double p75 = percentile(smoothValues, 0.75);
+    const double p90 = percentile(smoothValues, 0.90);
+    const double threshold = std::max({
+        mean + std::sqrt(variance) * 0.45,
+        p75 * 1.08,
+        p90 * 0.82
+    });
+    const double strongThreshold = std::max(threshold * 1.22, p90 * 0.96);
+
+    std::vector<MotionPeak> peaks;
+    for (std::size_t i = 1; i + 1 < smoothed.size(); ++i) {
+        const MotionSample& previous = smoothed[i - 1];
+        const MotionSample& current = smoothed[i];
+        const MotionSample& next = smoothed[i + 1];
+        if (current.intensity < threshold) {
+            continue;
+        }
+        if (current.intensity < previous.intensity || current.intensity < next.intensity) {
             continue;
         }
 
-        HighlightEvent event;
-        event.eventType = sample.intensity > threshold * 1.35 ? 2 : 0;
-        event.startSec = std::max(0.0, sample.timeSec - 2.0);
-        event.endSec = durationSec > 0.0 ? std::min(durationSec, sample.timeSec + 3.5) : sample.timeSec + 3.5;
-        event.confidence = static_cast<float>(std::min(1.0, 0.55 + sample.intensity / std::max(1.0, threshold) * 0.25));
-        event.description = event.eventType == 2 ? "strong football action" : "match motion highlight";
+        peaks.push_back({current.timeSec, current.intensity, threshold});
+    }
 
-        if (!events.empty() && event.startSec <= events.back().endSec + 1.5) {
-            events.back().endSec = std::max(events.back().endSec, event.endSec);
-            events.back().confidence = std::max(events.back().confidence, event.confidence);
+    if (peaks.empty()) {
+        for (const auto& sample : smoothed) {
+            if (sample.intensity >= threshold) {
+                peaks.push_back({sample.timeSec, sample.intensity, threshold});
+            }
+        }
+    }
+
+    const double minGapSec = 5.0;
+    const double maxClipSec = 18.0;
+    const double weakPreSec = 1.8;
+    const double weakPostSec = 3.8;
+    const double strongPreSec = 2.8;
+    const double strongPostSec = 5.6;
+
+    for (const auto& peak : peaks) {
+        const bool strong = peak.intensity >= strongThreshold;
+        const double preSec = strong ? strongPreSec : weakPreSec;
+        const double postSec = strong ? strongPostSec : weakPostSec;
+
+        HighlightEvent event;
+        event.eventType = strong ? 2 : 0;
+        event.startSec = std::max(0.0, peak.timeSec - preSec);
+        event.endSec = durationSec > 0.0 ? std::min(durationSec, peak.timeSec + postSec) : peak.timeSec + postSec;
+        if (event.endSec - event.startSec > maxClipSec) {
+            event.endSec = event.startSec + maxClipSec;
+        }
+        event.confidence = static_cast<float>(std::clamp(
+            0.52 + (peak.intensity - peak.baseline) / std::max(1.0, peak.baseline) * 0.42,
+            0.52,
+            0.98
+        ));
+        event.description = strong ? "strong football action" : "match motion highlight";
+
+        if (!events.empty() && event.startSec <= events.back().endSec + minGapSec) {
+            HighlightEvent& merged = events.back();
+            merged.endSec = std::max(merged.endSec, event.endSec);
+            if (merged.endSec - merged.startSec > maxClipSec) {
+                merged.endSec = merged.startSec + maxClipSec;
+            }
+            merged.confidence = std::max(merged.confidence, event.confidence);
             if (event.eventType == 2) {
-                events.back().eventType = 2;
-                events.back().description = "strong football action";
+                merged.eventType = 2;
+                merged.description = "strong football action";
             }
         } else {
             events.push_back(event);
         }
     }
 
+    events.erase(std::remove_if(events.begin(), events.end(), [](const HighlightEvent& event) {
+        return event.endSec - event.startSec < 2.0;
+    }), events.end());
+
+    std::cout << "Motion samples: " << samples.size()
+              << " mean=" << std::fixed << std::setprecision(2) << mean
+              << " threshold=" << threshold
+              << " peaks=" << peaks.size()
+              << " merged_events=" << events.size() << std::endl;
+
     if (events.empty() && durationSec > 0.0) {
+        auto bestIt = std::max_element(samples.begin(), samples.end(), [](const MotionSample& lhs, const MotionSample& rhs) {
+            return lhs.intensity < rhs.intensity;
+        });
+        const double center = bestIt == samples.end() ? 0.0 : bestIt->timeSec;
+        const double fallbackDuration = std::min(durationSec, 20.0);
+        const double startTime = std::max(0.0, center - fallbackDuration / 2.0);
+
         HighlightEvent fallback;
         fallback.eventType = 0;
-        fallback.startSec = 0.0;
-        fallback.endSec = std::min(durationSec, 20.0);
+        fallback.startSec = startTime;
+        fallback.endSec = std::min(durationSec, startTime + fallbackDuration);
         fallback.confidence = 0.6f;
         fallback.description = "actual match video segment";
         events.push_back(fallback);
@@ -216,7 +322,6 @@ std::vector<HighlightEvent> buildMotionEvents(const std::string& videoPath, doub
 
     return events;
 }
-
 int exportActualVideo(const std::string& inputPath, const std::string& outputName) {
     double fps = FPS;
     double durationSec = 0.0;
