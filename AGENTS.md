@@ -121,6 +121,45 @@ Metrics should include:
 - live processing latency;
 - subjective viewer satisfaction and coaching usefulness.
 
+### Football Recognition Workflow For Editing
+
+When preparing clips or validating football recognition for post-match editing, use the current C++ debug workflow before judging the detector from raw automatic output. The practical workflow proven on `exercise/6月15日/足球识别.mp4` is:
+
+1. **Start from ball-first recognition.** The ball is the anchor for the later broadcast crop, event timeline, and player relevance. Do not evaluate the scene by drawing every low-confidence target in the whole frame.
+2. **Use multi-seed ball initialization when the automatic bootstrap misses the early frames or drifts.** The debug entry supports repeated seed groups:
+
+   ```powershell
+   .\build\bin\football_auto_broadcast.exe --debug-ball-detection "<video-path>" <frame> <x> <y> [radius] [<frame> <x> <y> <radius> ...]
+   ```
+
+   For the current June 15 test video, the stable two-anchor command is:
+
+   ```powershell
+   .\build\bin\football_auto_broadcast.exe --debug-ball-detection "D:\LUO\football-auto-broadcast\football-auto-broadcast\exercise\6月15日\足球识别.mp4" 0 598 722 160 86 875 722 160
+   ```
+
+   The first seed fills the opening frames. The later seed corrects accumulated drift and keeps the ball trajectory stable for the main segment. If a future video has uncertain frames, inspect the frame visually, record the ball center, and add another seed at that frame instead of lowering thresholds globally.
+3. **Use a large circular ball search region as the local motion window.** The circle represents the short-time physical assumption that the football can only move within a limited neighborhood. It should guide the template match, trajectory drawing, and next-frame prediction.
+4. **Filter displayed players by ball relevance during editing visualization.** For edited proof videos, a `player` target should mean an active player near the ball, not every person-like object in the whole image. Keep only candidates that:
+   - have a plausible standing-person shape;
+   - have a foot point on the pitch area;
+   - are close to the current ball center;
+   - have a foot-point height close to the ball's ground band;
+   - are among the two nearest active players to the ball.
+
+   This prevents buildings, light poles, moving background, and irrelevant sideline people from being shown as football players. It also matches the editing goal: the player boxes should follow the ball context, not full-frame background motion.
+5. **Verify with a contact sheet before accepting a video.** Always generate or inspect representative frames from the beginning, middle, and end of the output. The minimum check should confirm:
+   - the first visible frames already contain the ball box;
+   - the ball box stays on the real football after re-seeding;
+   - green player boxes do not appear on buildings, light poles, or far sideline people;
+   - the shown players are the active players around the ball.
+
+The current validated output files are examples of the desired result:
+
+- `preview/football_multiseed_active_players_visualization.mp4`
+- `preview/football_multiseed_active_players_contact_sheet.png`
+- `exercise/6月15日/足球识别_开头补全_活跃球员过滤可视化.mp4`
+
 ### Hardware Strategy
 
 For the assignment delivery, choose stable and low-risk hardware:
