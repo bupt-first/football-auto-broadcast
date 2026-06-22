@@ -613,6 +613,83 @@ int debugBallDetection(
                 }
             }
         }
+
+        if (trackingActive) {
+            cv::Point ballCenter = searchCenter;
+            for (const auto& target : targets) {
+                if (target.type == TargetType::BALL) {
+                    const cv::Rect box = target.box & cv::Rect(0, 0, frame.cols, frame.rows);
+                    if (!box.empty()) {
+                        ballCenter = cv::Point(box.x + box.width / 2, box.y + box.height / 2);
+                        break;
+                    }
+                }
+            }
+
+            struct PlayerCandidate {
+                std::size_t index = 0;
+                double distance = 0.0;
+            };
+
+            std::vector<PlayerCandidate> activePlayers;
+            const double maxPlayerDistance = std::max(activeSeedRadius * 2.75, frame.cols * 0.10);
+            const double maxFootBallVerticalGap = std::max(activeSeedRadius * 1.10, frame.rows * 0.11);
+            const double minPlayerHeight = frame.rows * 0.055;
+            const double maxPlayerHeight = frame.rows * 0.55;
+            const int pitchFootLine = static_cast<int>(std::round(frame.rows * 0.42));
+
+            for (std::size_t i = 0; i < targets.size(); ++i) {
+                if (targets[i].type != TargetType::PLAYER) {
+                    continue;
+                }
+
+                const cv::Rect box = targets[i].box & cv::Rect(0, 0, frame.cols, frame.rows);
+                if (box.empty()) {
+                    continue;
+                }
+
+                const double aspect = static_cast<double>(box.height) / std::max(1, box.width);
+                const cv::Point footPoint(box.x + box.width / 2, box.y + box.height);
+                const double distance = cv::norm(cv::Point2d(footPoint) - cv::Point2d(ballCenter));
+                const bool plausibleShape = box.height >= minPlayerHeight
+                    && box.height <= maxPlayerHeight
+                    && box.width >= 10
+                    && aspect >= 1.05
+                    && aspect <= 5.8;
+                const bool onPitch = footPoint.y >= pitchFootLine;
+                const bool nearBall = distance <= maxPlayerDistance;
+                const bool sameGroundBand = std::abs(footPoint.y - ballCenter.y) <= maxFootBallVerticalGap;
+
+                if (plausibleShape && onPitch && nearBall && sameGroundBand) {
+                    activePlayers.push_back({i, distance});
+                }
+            }
+
+            std::sort(activePlayers.begin(), activePlayers.end(), [](const PlayerCandidate& lhs, const PlayerCandidate& rhs) {
+                return lhs.distance < rhs.distance;
+            });
+            if (activePlayers.size() > 2) {
+                activePlayers.resize(2);
+            }
+
+            std::vector<TargetInfo> filteredTargets;
+            filteredTargets.reserve(targets.size());
+            for (std::size_t i = 0; i < targets.size(); ++i) {
+                if (targets[i].type != TargetType::PLAYER) {
+                    filteredTargets.push_back(targets[i]);
+                    continue;
+                }
+
+                const bool keepPlayer = std::find_if(activePlayers.begin(), activePlayers.end(), [i](const PlayerCandidate& candidate) {
+                    return candidate.index == i;
+                }) != activePlayers.end();
+                if (keepPlayer) {
+                    filteredTargets.push_back(targets[i]);
+                }
+            }
+            targets.swap(filteredTargets);
+        }
+
         if (!targets.empty()) {
             ++framesWithTargets;
         }
