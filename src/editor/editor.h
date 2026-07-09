@@ -26,6 +26,13 @@ struct HighlightEvent {
     std::string replayCamera = "panorama";
     std::string selectionReason;
     std::string description;
+    cv::Rect mainTarget;
+    std::vector<TargetInfo> relatedTargets;
+};
+
+struct EventTargetFrame {
+    double timestamp = 0.0;
+    std::vector<TargetInfo> targets;
 };
 
 struct VideoSource {
@@ -69,6 +76,7 @@ struct EDLClip {
     std::string selectionReason;
     std::string description;
     std::vector<HighlightEvent> events;
+    std::vector<EventTargetFrame> targetFrames;
 };
 
 using ProgressCallback = std::function<void(int)>;
